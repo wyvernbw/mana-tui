@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bon.workspace = true
+bon = { workspace = true, features = ["experimental-overwritable"] }
 ratatui.workspace = true
 flume.workspace = true
 smol.workspace = true

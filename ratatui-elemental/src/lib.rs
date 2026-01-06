@@ -1,433 +1,141 @@
-use std::{any::Any, sync::Arc};
+//! # ratatui-elemental
+//!
+//! ratatui layout library
 
-use derive_more as d;
-use generational_arena::{Arena, Index};
-use glam::{U16Vec2, u16vec2};
-use ratatui::{
-    buffer::Buffer,
-    layout::{Direction, Margin, Rect},
-    widgets::{Padding, StatefulWidget, Widget},
-};
-use smallbox::SmallBox;
+#![forbid(missing_docs)]
 
-type ElementArena = Arena<TuiElement>;
-type WidgetBox = SmallBox<dyn ElWidget, usize>;
-type WidgetArena = Arena<WidgetBox>;
+pub(crate) mod layout;
 
-trait ElWidget: std::fmt::Debug {
-    fn render_element(&self, area: Rect, buf: &mut Buffer);
-}
+/// prelude module. contains public api for `ratatui-elemental`.
+///
+/// # Usage
+///
+/// ```
+/// use ratatui_elemental::prelude::*;
+/// ```
+pub mod prelude {
+    use ratatui::{
+        layout::{Direction, Rect},
+        widgets::{Block, BorderType, Borders, Padding, Paragraph},
+    };
 
-impl<W> ElWidget for W
-where
-    W: Widget + Clone + std::fmt::Debug,
-{
-    fn render_element(&self, area: Rect, buf: &mut Buffer) {
-        self.clone().render(area, buf);
-    }
-}
+    use crate::layout::{ElWidget, ElementCtx, ElementIdx, LayoutParams, Size};
 
-#[derive(Default)]
-struct ElementCtx {
-    elements: ElementArena,
-    widgets: WidgetArena,
-}
-
-impl std::ops::Index<ElementIdx> for ElementCtx {
-    type Output = TuiElement;
-
-    fn index(&self, index: ElementIdx) -> &Self::Output {
-        &self.elements[*index]
-    }
-}
-
-impl std::ops::IndexMut<ElementIdx> for ElementCtx {
-    fn index_mut(&mut self, index: ElementIdx) -> &mut Self::Output {
-        &mut self.elements[*index]
-    }
-}
-
-#[bon::bon]
-impl ElementCtx {
+    /// create element builder.
+    ///
+    /// an element is a unit in the layout system. elements have children
+    /// and form a tree that whose layout can be rendered by the context.
+    ///
+    /// # params
+    /// - `widget`: the widget to be rendered
+    ///
+    /// # methods
+    /// - `create`: construct the element
+    /// - `width`: sizing along the x axis
+    /// - `height`: sizing along the y axis,
+    /// - `direction`: layout direction for children
+    /// - `padding`: padding around around children
+    /// - `gap`: gap between children on the main axis
+    #[bon::builder]
     #[builder(finish_fn = create)]
-    pub fn element<W>(
-        #[builder(start_fn)] widget: W,
-        #[builder(finish_fn)] ctx: &mut Self,
-        #[builder(default)] layout_params: LayoutParams,
+    pub fn element(
+        #[builder(start_fn)] widget: impl ElWidget + 'static,
+        #[builder(finish_fn)] ctx: &mut ElementCtx,
+        #[builder(overwritable)] layout_params: Option<LayoutParams>,
+        #[builder(default, overwritable)] width: Size,
+        #[builder(default, overwritable)] height: Size,
+        #[builder(default, overwritable)] direction: Direction,
+        #[builder(overwritable)] padding: Option<Padding>,
+        #[builder(default, overwritable)] padding_left: u16,
+        #[builder(default, overwritable)] padding_right: u16,
+        #[builder(default, overwritable)] padding_top: u16,
+        #[builder(default, overwritable)] padding_bottom: u16,
+        #[builder(default, overwritable)] gap: u16,
         children: Option<&[ElementIdx]>,
-    ) -> ElementIdx
-    where
-        W: ElWidget + 'static,
-    {
-        let children = match children {
-            Some(children) => children.to_vec(),
-            None => Vec::default(),
+    ) -> ElementIdx {
+        let layout_params = layout_params.unwrap_or(LayoutParams {
+            width,
+            height,
+            direction,
+            padding: padding.unwrap_or(Padding {
+                left: padding_left,
+                right: padding_right,
+                top: padding_top,
+                bottom: padding_bottom,
+            }),
+            gap,
+        });
+        ElementCtx::element(widget)
+            .maybe_children(children)
+            .layout_params(layout_params)
+            .create(ctx)
+    }
+
+    /// return type of [`block`]
+    ///
+    /// see [`element`] for more options.
+    pub type BlockElBuilder =
+        ElementBuilder<'static, 'static, Block<'static>, element_builder::Empty>;
+
+    /// function for creating [`Block`] structs with sensible defaults around borders.
+    ///
+    /// this function will create an [`ElementBuilder`] that has its padding set to 1
+    /// on all sides where the block has a border. this ensures that children elements
+    /// do not draw over the block's borders.
+    ///
+    /// see [`element`] for more options.
+    pub fn block(block: Block<'static>) -> BlockElBuilder {
+        // FIXME: when ratatui exposes `Block::borders`
+        let test_area = Rect {
+            x: 0,
+            y: 0,
+            width: 2,
+            height: 2,
         };
-        let children = Arc::new(children);
-        let widget_idx = ctx.widgets.insert(SmallBox::new(widget) as WidgetBox);
-        let widget_idx = WidgetIdx(widget_idx);
-        let element = TuiElement {
-            widget: widget_idx,
-            layout_params,
-            size: U16Vec2::default(),
-            position: U16Vec2::default(),
-            children,
-        };
-        let element_idx = ctx.elements.insert(element);
+        let inner_area = block.inner(test_area);
+        let left = inner_area.left() - test_area.left();
+        let top = inner_area.top() - test_area.top();
+        let right = test_area.height - inner_area.height;
+        let bottom = test_area.height - inner_area.height;
 
-        ElementIdx(element_idx)
-    }
-    fn calculate_fit_sizes(&mut self, element: ElementIdx) {
-        if let Size::Fixed(size) = self[element].layout_params.width {
-            self[element].size.x = size
-        }
-        if let Size::Fixed(size) = self[element].layout_params.height {
-            self[element].size.y = size
-        }
-        let children = self[element].children.clone();
-        let padding = self[element].layout_params.padding;
-        let max_size = self[element].size.saturating_sub(u16vec2(
-            padding.right + padding.left,
-            padding.bottom + padding.top,
-        ));
-        let direction = self[element].layout_params.direction;
-        let mut space_used = AxisSizes::default();
-        for child in children.iter().copied() {
-            self.calculate_fit_sizes(child);
-            if self[element].layout_params.width.should_clamp() {
-                self[child].size.x = self[child].size.x.clamp(0, max_size.x);
-            }
-            if self[element].layout_params.width.should_clamp() {
-                self[child].size.y = self[child].size.y.clamp(0, max_size.x);
-            }
-            space_used = space_used.increase(self[child].size, direction);
-        }
-        space_used = space_used.pad(padding, direction);
-        space_used.main_axis +=
-            children.len().saturating_sub(1) as u16 * self[element].layout_params.gap;
-        let space_used = space_used.to_u16vec2(direction);
-        match self[element].layout_params.width {
-            Size::Fit | Size::Grow => {
-                self[element].size.x = space_used.x;
-            }
-            _ => {}
-        }
-        match self[element].layout_params.height {
-            Size::Fit | Size::Grow => {
-                self[element].size.y = space_used.y;
-            }
-            _ => {}
-        }
-    }
-    fn calculate_grow_sizes(&mut self, element: ElementIdx) {
-        let children = self[element].children.clone();
-        let padding = self[element].layout_params.padding;
-        let max_size = self[element].size.saturating_sub(u16vec2(
-            padding.right + padding.left,
-            padding.bottom + padding.top,
-        ));
-        let direction = self[element].layout_params.direction;
-        let used_space = children
-            .iter()
-            .copied()
-            .map(|child| self[child].size)
-            .sum::<U16Vec2>();
-        let remaining_size = self[element]
-            .size
-            .saturating_sub(used_space)
-            .clamp(U16Vec2::ZERO, max_size);
-        let mut remaining_size = axify(remaining_size, direction);
-        remaining_size.main_axis = remaining_size.main_axis.saturating_sub(
-            children.len().saturating_sub(1) as u16 * self[element].layout_params.gap,
-        );
-
-        // cross axis
-        for child in children.iter().copied() {
-            if !self[child].layout_params.cross_size(direction).is_grow() {
-                continue;
-            }
-            let mut size = AxisSizes::from_u16vec2(self[child].size, direction);
-            size.cross_axis = axify(max_size, direction).cross_axis;
-            self[child].size = size.to_u16vec2(direction);
-        }
-
-        // main axis
-        while remaining_size.main_axis > 0 {
-            let mut smallest: [Option<ElementIdx>; 2] = [None, None];
-            let mut first = None;
-            let mut all_equal = true;
-            let mut grow_count = 0;
-            for child in children.iter().copied() {
-                let is_grow = self[child].layout_params.main_size(direction).is_grow();
-                if !is_grow {
-                    continue;
-                }
-                let size = self[child].size;
-                let size = AxisSizes::from_u16vec2(size, direction);
-                if first.is_some() && Some(size) != first {
-                    all_equal = false;
-                }
-                grow_count += 1;
-                first = Some(size);
-                match smallest {
-                    [None, None] => {
-                        smallest[0] = Some(child);
-                    }
-                    [Some(a), None] => {
-                        let asize = axify(self[a].size, direction);
-                        if asize.main_axis < size.main_axis {
-                            smallest[1] = Some(child);
-                        } else if size.main_axis < asize.main_axis {
-                            smallest[1] = smallest[0];
-                            smallest[0] = Some(child);
-                        }
-                    }
-                    [Some(a), Some(b)] => {
-                        let asize = axify(self[a].size, direction);
-                        let bsize = axify(self[b].size, direction);
-                        if asize.main_axis < size.main_axis {
-                            smallest[1] = smallest[0];
-                            smallest[0] = Some(child);
-                        } else if size.main_axis < bsize.main_axis {
-                            smallest[1] = Some(child);
-                        }
-                    }
-                    _ => unreachable!(),
-                }
-            }
-            if all_equal && grow_count > 0 {
-                let remainder = remaining_size.main_axis % grow_count;
-                let remaining_size = remaining_size.main_axis / grow_count;
-                let mut first = true;
-                for child in children.iter().copied() {
-                    let is_grow = self[child].layout_params.main_size(direction).is_grow();
-                    if !is_grow {
-                        continue;
-                    }
-                    let mut size = axify(self[child].size, direction);
-                    size.main_axis = remaining_size;
-                    if first {
-                        size.main_axis += remainder;
-                        first = false;
-                    }
-                    self[child].size = size.to_u16vec2(direction);
-                }
-                break;
-            }
-            match smallest {
-                [Some(a), Some(b)] => {
-                    let mut asize = axify(self[a].size, direction);
-                    let bsize = axify(self[b].size, direction);
-                    assert!(asize.main_axis != bsize.main_axis);
-                    remaining_size = remaining_size.min(remaining_size - (bsize - asize));
-                    asize.main_axis = remaining_size.main_axis;
-                    self[a].size = asize.to_u16vec2(direction);
-                }
-                [Some(a), None] => {
-                    let mut asize = axify(self[a].size, direction);
-                    asize.main_axis = remaining_size.main_axis;
-                    self[a].size = asize.to_u16vec2(direction);
-                    break;
-                }
-                [None, None] => break,
-                [None, Some(_)] => unreachable!(),
-            }
-        }
-
-        for child in children.iter().copied() {
-            self.calculate_grow_sizes(child);
-        }
-    }
-    fn calculate_positions(&mut self, root: ElementIdx) {
-        let dir = self[root].layout_params.direction;
-        let children = self[root].children.clone();
-        let padding = self[root].layout_params.padding;
-        let gap = self[root].layout_params.gap;
-        let mut axis_start = 0;
-        for child in children.iter().copied() {
-            self[child].position = self[root].position;
-            match dir {
-                Direction::Horizontal => self[child].position.x += axis_start,
-                Direction::Vertical => self[child].position.y += axis_start,
-            }
-            self[child].position += u16vec2(padding.left, padding.top);
-            axis_start = increase_axis(axis_start, dir, self[child].size);
-            axis_start += gap;
-            self.calculate_positions(child);
-        }
-    }
-    pub(crate) fn calculate_layout(&mut self, element: ElementIdx) {
-        self.calculate_fit_sizes(element);
-        self.calculate_grow_sizes(element);
-        self.calculate_positions(element);
-    }
-    pub(crate) fn render(&self, root: ElementIdx, area: Rect, buf: &mut Buffer) {
-        let el = &self[root];
-        let area = el.split_area(area);
-        self.widgets[*el.widget].render_element(area, buf);
-        for child in el.children.iter().copied() {
-            self.render(child, area, buf);
-        }
-    }
-}
-
-fn increase_axis(init: u16, dir: Direction, size: U16Vec2) -> u16 {
-    match dir {
-        Direction::Horizontal => init + size.x,
-        Direction::Vertical => init + size.y,
-    }
-}
-
-#[derive(
-    Debug, Clone, Copy, Default, d::Sub, d::SubAssign, d::Add, d::AddAssign, d::Sum, PartialEq, Eq,
-)]
-struct AxisSizes {
-    main_axis: u16,
-    cross_axis: u16,
-}
-
-const fn axify(vec: U16Vec2, dir: Direction) -> AxisSizes {
-    AxisSizes::from_u16vec2(vec, dir)
-}
-
-impl AxisSizes {
-    #[inline(always)]
-    fn min(self, other: AxisSizes) -> AxisSizes {
-        AxisSizes {
-            main_axis: self.main_axis.min(other.main_axis),
-            cross_axis: self.cross_axis.min(other.cross_axis),
-        }
-    }
-    #[inline(always)]
-    const fn from_u16vec2(value: U16Vec2, dir: Direction) -> Self {
-        match dir {
-            Direction::Horizontal => Self {
-                main_axis: value.x,
-                cross_axis: value.y,
-            },
-            Direction::Vertical => Self {
-                main_axis: value.y,
-                cross_axis: value.x,
-            },
-        }
-    }
-    #[inline(always)]
-    const fn pad(self, padding: Padding, dir: Direction) -> AxisSizes {
-        match dir {
-            Direction::Horizontal => AxisSizes {
-                main_axis: self.main_axis + padding.left + padding.right,
-                cross_axis: self.cross_axis + padding.top + padding.bottom,
-            },
-            Direction::Vertical => AxisSizes {
-                main_axis: self.main_axis + padding.top + padding.bottom,
-                cross_axis: self.cross_axis + padding.left + padding.right,
-            },
-        }
-    }
-    #[inline(always)]
-    fn increase(self, by: U16Vec2, dir: Direction) -> AxisSizes {
-        match dir {
-            Direction::Horizontal => AxisSizes {
-                main_axis: self.main_axis + by.x,
-                cross_axis: self.cross_axis.max(by.y),
-            },
-            Direction::Vertical => AxisSizes {
-                main_axis: self.main_axis + by.y,
-                cross_axis: self.cross_axis.max(by.x),
-            },
-        }
-    }
-    #[inline(always)]
-    const fn to_u16vec2(self, dir: Direction) -> U16Vec2 {
-        match dir {
-            Direction::Horizontal => u16vec2(self.main_axis, self.cross_axis),
-            Direction::Vertical => u16vec2(self.cross_axis, self.main_axis),
-        }
-    }
-}
-
-#[derive(d::Deref, d::From, Clone, Copy, Debug)]
-pub struct WidgetIdx(Index);
-#[derive(d::Deref, d::From, Clone, Copy, Debug)]
-pub struct ElementIdx(Index);
-
-impl ElementIdx {
-    fn children(self, ctx: &mut ElementCtx, children: &[ElementIdx]) -> Self {
-        ctx[self].children = Arc::new(children.to_vec());
-        self
-    }
-}
-
-struct TuiElement {
-    widget: WidgetIdx,
-    layout_params: LayoutParams,
-    position: U16Vec2,
-    size: U16Vec2,
-    // FIXME: double pointer indirection
-    children: Arc<Vec<ElementIdx>>,
-}
-
-#[derive(Default)]
-pub struct LayoutParams {
-    width: Size,
-    height: Size,
-    direction: Direction,
-    padding: Padding,
-    gap: u16,
-}
-
-impl LayoutParams {
-    fn main_size(&self, dir: Direction) -> Size {
-        match dir {
-            Direction::Horizontal => self.width,
-            Direction::Vertical => self.height,
-        }
-    }
-    fn cross_size(&self, dir: Direction) -> Size {
-        match dir {
-            Direction::Horizontal => self.height,
-            Direction::Vertical => self.width,
-        }
-    }
-}
-
-#[derive(Default, Clone, Copy, Debug)]
-enum Size {
-    Fixed(u16),
-    #[default]
-    Fit,
-    Grow,
-}
-
-impl Size {
-    fn should_clamp(&self) -> bool {
-        match self {
-            Size::Fixed(_) => true,
-            Size::Fit => false,
-            Size::Grow => false,
-        }
-    }
-    fn is_grow(&self) -> bool {
-        matches!(self, Size::Grow)
-    }
-}
-
-impl TuiElement {
-    fn split_area(&self, area: Rect) -> Rect {
-        area.intersection(Rect {
-            // DONE: implement position
-            x: self.position.x,
-            y: self.position.y,
-            width: self.size.x,
-            height: self.size.y,
+        element(block).padding(Padding {
+            left,
+            right,
+            top,
+            bottom,
         })
     }
-}
-fn buffer_to_string(buf: &Buffer) -> String {
-    buf.content()
-        .chunks(buf.area.width as usize)
-        .flat_map(|line| line.iter().map(|cell| cell.symbol()).chain(["\n"]))
-        .collect()
+
+    /// like [`block`], but sets the borders to [`BorderType::Rounded`] and [`Borders::ALL`].
+    ///
+    /// see [`element`] for more options.
+    pub fn block_rounded(bl: Block<'static>) -> BlockElBuilder {
+        block(bl.border_type(BorderType::Rounded).borders(Borders::all()))
+    }
+
+    /// marker trait implemented for any `ElementBuilder`.
+    ///
+    /// it is used to extend builders with other methods. you can also use it to target
+    /// implementations of extension traits for your own needs.
+    ///
+    /// ```
+    /// use ratatui_elemental::prelude::*;
+    ///
+    /// trait MyElementExt {
+    ///     fn foo(&self);
+    /// }
+    ///
+    /// impl<T: ElementalBuilder> MyElementExt for T {
+    ///     # fn foo(&self) {}
+    ///     /* ... */
+    /// }
+    /// ```
+    pub trait ElementalBuilder {}
+
+    impl<'f1, 'f2, W: ElWidget, S: element_builder::State> ElementalBuilder
+        for ElementBuilder<'f1, 'f2, W, S>
+    {
+    }
 }
 
 #[cfg(test)]
@@ -439,8 +147,17 @@ mod tests {
         widgets::{Block, BorderType, Padding, Paragraph},
     };
 
-    use crate::{ElementCtx, LayoutParams, Size, buffer_to_string};
+    use crate::{
+        layout::{ElementCtx, LayoutParams, Size},
+        prelude::{block, block_rounded, element},
+    };
 
+    fn buffer_to_string(buf: &Buffer) -> String {
+        buf.content()
+            .chunks(buf.area.width as usize)
+            .flat_map(|line| line.iter().map(|cell| cell.symbol()).chain(["\n"]))
+            .collect()
+    }
     #[test]
     fn test_fixed_size() {
         let _ = tracing_subscriber::fmt::try_init();
@@ -467,35 +184,26 @@ mod tests {
         _ = tracing_subscriber::fmt::try_init();
         let mut buf = Buffer::empty(Rect::new(0, 0, 50, 10));
         let mut ctx = ElementCtx::default();
-        let child = |ctx: &mut ElementCtx, idx| {
-            ElementCtx::element(
-                Block::bordered()
-                    .border_type(BorderType::Rounded)
-                    .title_top(format!("child #{idx}")),
-            )
-            .layout_params(LayoutParams {
-                width: Size::Fixed(10 + idx as u16 * 2),
-                height: Size::Fixed(3),
-                ..Default::default()
-            })
-            .create(ctx)
-        };
-        let children = &[child(&mut ctx, 0), child(&mut ctx, 1)];
-        let root = ElementCtx::element(
+        let root = block(
             Block::bordered()
                 .border_type(BorderType::Rounded)
                 .title_top("parent")
                 .fg(Color::Red),
         )
-        .children(children)
-        .layout_params(LayoutParams {
-            width: Size::Fixed(24),
-            height: Size::Fixed(8),
-            direction: Direction::Vertical,
-            padding: Padding::uniform(1),
-            ..Default::default()
-        })
+        .children(&[
+            block_rounded(Block::bordered().title_top("child #0".to_string()))
+                .width(Size::Fixed(10))
+                .height(Size::Fixed(3))
+                .create(&mut ctx),
+            block_rounded(Block::bordered().title_top("child #1".to_string()))
+                .width(Size::Fixed(14))
+                .height(Size::Fixed(3))
+                .create(&mut ctx),
+        ])
+        .width(Size::Fixed(24))
+        .height(Size::Fixed(8))
         .create(&mut ctx);
+
         ctx.calculate_layout(root);
         ctx.render(root, buf.area, &mut buf);
         tracing::info!(
@@ -721,7 +429,6 @@ mod tests {
             gap: 1,
             height: Size::Grow,
             direction: Direction::Vertical,
-            ..Default::default()
         })
         .children(&[child2, child3])
         .create(&mut ctx);
