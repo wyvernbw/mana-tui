@@ -1,0 +1,19 @@
+[package]
+name = "ratatui-elemental"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bon.workspace = true
+ratatui.workspace = true
+flume.workspace = true
+smol.workspace = true
+slab.workspace = true
+smallbox.workspace = true
+smallvec.workspace = true
+derive_more.workspace = true
+crossterm.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+generational-arena = "0.2.9"
+glam = "0.30.9"
