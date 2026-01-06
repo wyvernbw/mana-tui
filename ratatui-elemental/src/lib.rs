@@ -14,13 +14,13 @@ type ElementArena = Arena<TuiElement>;
 type WidgetBox = SmallBox<dyn ElWidget, usize>;
 type WidgetArena = Arena<WidgetBox>;
 
-trait ElWidget {
+trait ElWidget: std::fmt::Debug {
     fn render_element(&self, area: Rect, buf: &mut Buffer);
 }
 
 impl<W> ElWidget for W
 where
-    W: Widget + Clone,
+    W: Widget + Clone + std::fmt::Debug,
 {
     fn render_element(&self, area: Rect, buf: &mut Buffer) {
         self.clone().render(area, buf);
@@ -51,8 +51,8 @@ impl std::ops::IndexMut<ElementIdx> for ElementCtx {
 impl ElementCtx {
     #[builder(finish_fn = create)]
     pub fn element<W>(
-        &mut self,
         #[builder(start_fn)] widget: W,
+        #[builder(finish_fn)] ctx: &mut Self,
         #[builder(default)] layout_params: LayoutParams,
         children: Option<&[ElementIdx]>,
     ) -> ElementIdx
@@ -64,7 +64,7 @@ impl ElementCtx {
             None => Vec::default(),
         };
         let children = Arc::new(children);
-        let widget_idx = self.widgets.insert(SmallBox::new(widget) as WidgetBox);
+        let widget_idx = ctx.widgets.insert(SmallBox::new(widget) as WidgetBox);
         let widget_idx = WidgetIdx(widget_idx);
         let element = TuiElement {
             widget: widget_idx,
@@ -73,21 +73,16 @@ impl ElementCtx {
             position: U16Vec2::default(),
             children,
         };
-        let element_idx = self.elements.insert(element);
+        let element_idx = ctx.elements.insert(element);
 
         ElementIdx(element_idx)
     }
     fn calculate_fit_sizes(&mut self, element: ElementIdx) {
-        let el = &mut self[element];
-        match el.layout_params.width {
-            Size::Fixed(size) => el.size.x = size,
-            Size::Fit => {}
-            Size::Grow => {}
+        if let Size::Fixed(size) = self[element].layout_params.width {
+            self[element].size.x = size
         }
-        match el.layout_params.height {
-            Size::Fixed(size) => el.size.y = size,
-            Size::Fit => {}
-            Size::Grow => {}
+        if let Size::Fixed(size) = self[element].layout_params.height {
+            self[element].size.y = size
         }
         let children = self[element].children.clone();
         let padding = self[element].layout_params.padding;
@@ -96,7 +91,7 @@ impl ElementCtx {
             padding.bottom + padding.top,
         ));
         let direction = self[element].layout_params.direction;
-        let mut axis_sizes = AxisSizes::default();
+        let mut space_used = AxisSizes::default();
         for child in children.iter().copied() {
             self.calculate_fit_sizes(child);
             if self[element].layout_params.width.should_clamp() {
@@ -105,27 +100,24 @@ impl ElementCtx {
             if self[element].layout_params.width.should_clamp() {
                 self[child].size.y = self[child].size.y.clamp(0, max_size.x);
             }
-            axis_sizes = axis_sizes.increase(self[child].size, direction);
+            space_used = space_used.increase(self[child].size, direction);
         }
-        axis_sizes = axis_sizes.pad(padding, direction);
-        axis_sizes.main_axis +=
+        space_used = space_used.pad(padding, direction);
+        space_used.main_axis +=
             children.len().saturating_sub(1) as u16 * self[element].layout_params.gap;
-        let axis_sizes = axis_sizes.to_u16vec2(direction);
+        let space_used = space_used.to_u16vec2(direction);
         match self[element].layout_params.width {
-            Size::Fixed(_) => {}
             Size::Fit | Size::Grow => {
-                self[element].size.x = axis_sizes.x;
+                self[element].size.x = space_used.x;
             }
+            _ => {}
         }
         match self[element].layout_params.height {
-            Size::Fixed(_) => {}
             Size::Fit | Size::Grow => {
-                self[element].size.y = axis_sizes.y;
+                self[element].size.y = space_used.y;
             }
+            _ => {}
         }
-        // for child in children.iter().copied() {
-        //     self.calculate_fit_sizes(child);
-        // }
     }
     fn calculate_grow_sizes(&mut self, element: ElementIdx) {
         let children = self[element].children.clone();
@@ -144,16 +136,19 @@ impl ElementCtx {
             .size
             .saturating_sub(used_space)
             .clamp(U16Vec2::ZERO, max_size);
-        tracing::info!(?used_space, ?remaining_size);
         let mut remaining_size = axify(remaining_size, direction);
+        remaining_size.main_axis = remaining_size.main_axis.saturating_sub(
+            children.len().saturating_sub(1) as u16 * self[element].layout_params.gap,
+        );
 
         // cross axis
         for child in children.iter().copied() {
-            if self[child].layout_params.cross_size(direction).is_grow() {
-                let mut size = AxisSizes::from_u16vec2(self[child].size, direction);
-                size.cross_axis = remaining_size.cross_axis;
-                self[child].size = size.to_u16vec2(direction);
+            if !self[child].layout_params.cross_size(direction).is_grow() {
+                continue;
             }
+            let mut size = AxisSizes::from_u16vec2(self[child].size, direction);
+            size.cross_axis = axify(max_size, direction).cross_axis;
+            self[child].size = size.to_u16vec2(direction);
         }
 
         // main axis
@@ -163,31 +158,31 @@ impl ElementCtx {
             let mut all_equal = true;
             let mut grow_count = 0;
             for child in children.iter().copied() {
+                let is_grow = self[child].layout_params.main_size(direction).is_grow();
+                if !is_grow {
+                    continue;
+                }
                 let size = self[child].size;
                 let size = AxisSizes::from_u16vec2(size, direction);
-                let is_grow = self[child].layout_params.main_size(direction).is_grow();
-                if is_grow {
-                    if first.is_some() && Some(size) != first {
-                        all_equal = false;
-                    }
-                    grow_count += 1;
+                if first.is_some() && Some(size) != first {
+                    all_equal = false;
                 }
+                grow_count += 1;
                 first = Some(size);
-                match (&smallest, is_grow) {
-                    (_, false) => {}
-                    (&[None, None], true) => {
+                match smallest {
+                    [None, None] => {
                         smallest[0] = Some(child);
                     }
-                    (&[Some(a), None], true) => {
+                    [Some(a), None] => {
                         let asize = axify(self[a].size, direction);
                         if asize.main_axis < size.main_axis {
                             smallest[1] = Some(child);
-                        } else if asize.main_axis != size.main_axis {
+                        } else if size.main_axis < asize.main_axis {
                             smallest[1] = smallest[0];
                             smallest[0] = Some(child);
                         }
                     }
-                    (&[Some(a), Some(b)], true) => {
+                    [Some(a), Some(b)] => {
                         let asize = axify(self[a].size, direction);
                         let bsize = axify(self[b].size, direction);
                         if asize.main_axis < size.main_axis {
@@ -201,10 +196,20 @@ impl ElementCtx {
                 }
             }
             if all_equal && grow_count > 0 {
+                let remainder = remaining_size.main_axis % grow_count;
                 let remaining_size = remaining_size.main_axis / grow_count;
+                let mut first = true;
                 for child in children.iter().copied() {
+                    let is_grow = self[child].layout_params.main_size(direction).is_grow();
+                    if !is_grow {
+                        continue;
+                    }
                     let mut size = axify(self[child].size, direction);
                     size.main_axis = remaining_size;
+                    if first {
+                        size.main_axis += remainder;
+                        first = false;
+                    }
                     self[child].size = size.to_u16vec2(direction);
                 }
                 break;
@@ -261,7 +266,6 @@ impl ElementCtx {
         let area = el.split_area(area);
         self.widgets[*el.widget].render_element(area, buf);
         for child in el.children.iter().copied() {
-            tracing::info!(?child);
             self.render(child, area, buf);
         }
     }
@@ -271,21 +275,6 @@ fn increase_axis(init: u16, dir: Direction, size: U16Vec2) -> u16 {
     match dir {
         Direction::Horizontal => init + size.x,
         Direction::Vertical => init + size.y,
-    }
-}
-
-fn get_axis_rect(position: U16Vec2, dir: Direction, rect: Rect) -> Rect {
-    match dir {
-        Direction::Horizontal => Rect {
-            x: rect.x + position.x,
-            width: rect.width.saturating_sub(position.x),
-            ..rect
-        },
-        Direction::Vertical => Rect {
-            y: rect.y + position.y,
-            height: rect.height.saturating_sub(position.y),
-            ..rect
-        },
     }
 }
 
@@ -358,9 +347,9 @@ impl AxisSizes {
 }
 
 #[derive(d::Deref, d::From, Clone, Copy, Debug)]
-struct WidgetIdx(Index);
+pub struct WidgetIdx(Index);
 #[derive(d::Deref, d::From, Clone, Copy, Debug)]
-struct ElementIdx(Index);
+pub struct ElementIdx(Index);
 
 impl ElementIdx {
     fn children(self, ctx: &mut ElementCtx, children: &[ElementIdx]) -> Self {
@@ -379,7 +368,7 @@ struct TuiElement {
 }
 
 #[derive(Default)]
-struct LayoutParams {
+pub struct LayoutParams {
     width: Size,
     height: Size,
     direction: Direction,
@@ -402,7 +391,7 @@ impl LayoutParams {
     }
 }
 
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone, Copy, Debug)]
 enum Size {
     Fixed(u16),
     #[default]
@@ -415,7 +404,7 @@ impl Size {
         match self {
             Size::Fixed(_) => true,
             Size::Fit => false,
-            Size::Grow => true,
+            Size::Grow => false,
         }
     }
     fn is_grow(&self) -> bool {
@@ -434,43 +423,40 @@ impl TuiElement {
         })
     }
 }
+fn buffer_to_string(buf: &Buffer) -> String {
+    buf.content()
+        .chunks(buf.area.width as usize)
+        .flat_map(|line| line.iter().map(|cell| cell.symbol()).chain(["\n"]))
+        .collect()
+}
 
 #[cfg(test)]
 mod tests {
-    use glam::u16vec2;
     use ratatui::{
         buffer::Buffer,
         layout::{Direction, Rect},
         style::{Color, Stylize},
-        widgets::{Block, BorderType, Padding},
+        widgets::{Block, BorderType, Padding, Paragraph},
     };
 
-    use crate::{ElementCtx, LayoutParams, Size};
-
-    fn buffer_to_string(buf: &Buffer) -> String {
-        buf.content()
-            .chunks(buf.area.width as usize)
-            .flat_map(|line| line.iter().map(|cell| cell.symbol()).chain(["\n"]))
-            .collect()
-    }
+    use crate::{ElementCtx, LayoutParams, Size, buffer_to_string};
 
     #[test]
     fn test_fixed_size() {
         let _ = tracing_subscriber::fmt::try_init();
         let mut buf = Buffer::empty(Rect::new(0, 0, 50, 10));
         let mut ctx = ElementCtx::default();
-        let root = ctx
-            .element(
-                Block::bordered()
-                    .border_type(BorderType::Rounded)
-                    .fg(Color::Red),
-            )
-            .layout_params(LayoutParams {
-                width: Size::Fixed(24),
-                height: Size::Fixed(8),
-                ..Default::default()
-            })
-            .create();
+        let root = ElementCtx::element(
+            Block::bordered()
+                .border_type(BorderType::Rounded)
+                .fg(Color::Red),
+        )
+        .layout_params(LayoutParams {
+            width: Size::Fixed(24),
+            height: Size::Fixed(8),
+            ..Default::default()
+        })
+        .create(&mut ctx);
         ctx.calculate_layout(root);
         ctx.render(root, buf.area, &mut buf);
         tracing::info!("\ntest_fixed_size\n{}", buffer_to_string(&buf));
@@ -482,7 +468,7 @@ mod tests {
         let mut buf = Buffer::empty(Rect::new(0, 0, 50, 10));
         let mut ctx = ElementCtx::default();
         let child = |ctx: &mut ElementCtx, idx| {
-            ctx.element(
+            ElementCtx::element(
                 Block::bordered()
                     .border_type(BorderType::Rounded)
                     .title_top(format!("child #{idx}")),
@@ -492,25 +478,24 @@ mod tests {
                 height: Size::Fixed(3),
                 ..Default::default()
             })
-            .create()
+            .create(ctx)
         };
         let children = &[child(&mut ctx, 0), child(&mut ctx, 1)];
-        let root = ctx
-            .element(
-                Block::bordered()
-                    .border_type(BorderType::Rounded)
-                    .title_top("parent")
-                    .fg(Color::Red),
-            )
-            .children(children)
-            .layout_params(LayoutParams {
-                width: Size::Fixed(24),
-                height: Size::Fixed(8),
-                direction: Direction::Vertical,
-                padding: Padding::uniform(1),
-                ..Default::default()
-            })
-            .create();
+        let root = ElementCtx::element(
+            Block::bordered()
+                .border_type(BorderType::Rounded)
+                .title_top("parent")
+                .fg(Color::Red),
+        )
+        .children(children)
+        .layout_params(LayoutParams {
+            width: Size::Fixed(24),
+            height: Size::Fixed(8),
+            direction: Direction::Vertical,
+            padding: Padding::uniform(1),
+            ..Default::default()
+        })
+        .create(&mut ctx);
         ctx.calculate_layout(root);
         ctx.render(root, buf.area, &mut buf);
         tracing::info!(
@@ -525,7 +510,7 @@ mod tests {
         let mut buf = Buffer::empty(Rect::new(0, 0, 50, 10));
         let mut ctx = ElementCtx::default();
         let child = |ctx: &mut ElementCtx, idx| {
-            ctx.element(
+            ElementCtx::element(
                 Block::bordered()
                     .border_type(BorderType::Rounded)
                     .title_top(format!("child #{idx}")),
@@ -535,25 +520,24 @@ mod tests {
                 height: Size::Fixed(3),
                 ..Default::default()
             })
-            .create()
+            .create(ctx)
         };
         let children = &[child(&mut ctx, 0), child(&mut ctx, 1)];
-        let root = ctx
-            .element(
-                Block::bordered()
-                    .border_type(BorderType::Rounded)
-                    .title_top("parent")
-                    .fg(Color::Red),
-            )
-            .children(children)
-            .layout_params(LayoutParams {
-                width: Size::Fixed(24),
-                height: Size::Fixed(8),
-                direction: Direction::Vertical,
-                padding: Padding::uniform(1),
-                ..Default::default()
-            })
-            .create();
+        let root = ElementCtx::element(
+            Block::bordered()
+                .border_type(BorderType::Rounded)
+                .title_top("parent")
+                .fg(Color::Red),
+        )
+        .children(children)
+        .layout_params(LayoutParams {
+            width: Size::Fixed(24),
+            height: Size::Fixed(8),
+            direction: Direction::Vertical,
+            padding: Padding::uniform(1),
+            ..Default::default()
+        })
+        .create(&mut ctx);
         ctx.calculate_layout(root);
         ctx.render(root, buf.area, &mut buf);
         tracing::info!(
@@ -568,7 +552,7 @@ mod tests {
         let mut buf = Buffer::empty(Rect::new(0, 0, 50, 10));
         let mut ctx = ElementCtx::default();
         let child = |ctx: &mut ElementCtx, idx| {
-            ctx.element(
+            ElementCtx::element(
                 Block::bordered()
                     .border_type(BorderType::Rounded)
                     .title_top(format!("child #{idx}")),
@@ -578,25 +562,24 @@ mod tests {
                 height: Size::Fixed(3),
                 ..Default::default()
             })
-            .create()
+            .create(ctx)
         };
         let children = &[child(&mut ctx, 0), child(&mut ctx, 1)];
-        let root = ctx
-            .element(
-                Block::bordered()
-                    .border_type(BorderType::Rounded)
-                    .title_top("parent")
-                    .fg(Color::Red),
-            )
-            .children(children)
-            .layout_params(LayoutParams {
-                width: Size::Fit,
-                height: Size::Fit,
-                direction: Direction::Vertical,
-                padding: Padding::uniform(1),
-                ..Default::default()
-            })
-            .create();
+        let root = ElementCtx::element(
+            Block::bordered()
+                .border_type(BorderType::Rounded)
+                .title_top("parent")
+                .fg(Color::Red),
+        )
+        .children(children)
+        .layout_params(LayoutParams {
+            width: Size::Fit,
+            height: Size::Fit,
+            direction: Direction::Vertical,
+            padding: Padding::uniform(1),
+            ..Default::default()
+        })
+        .create(&mut ctx);
         ctx.calculate_layout(root);
         ctx.render(root, buf.area, &mut buf);
         tracing::info!("\ntest_fit\n{}", buffer_to_string(&buf));
@@ -606,8 +589,9 @@ mod tests {
         _ = tracing_subscriber::fmt::try_init();
         let mut buf = Buffer::empty(Rect::new(0, 0, 50, 10));
         let mut ctx = ElementCtx::default();
-        let child = |ctx: &mut ElementCtx, idx| {
-            ctx.element(
+        let child = |mut ctx: &mut ElementCtx, idx| {
+            let ctx1 = &mut ctx;
+            ElementCtx::element(
                 Block::bordered()
                     .border_type(BorderType::Rounded)
                     .title_top(format!("child #{idx}")),
@@ -617,25 +601,24 @@ mod tests {
                 height: Size::Fixed(3),
                 ..Default::default()
             })
-            .create()
+            .create(ctx1)
         };
         let children = &[child(&mut ctx, 0), child(&mut ctx, 1)];
-        let root = ctx
-            .element(
-                Block::bordered()
-                    .border_type(BorderType::Rounded)
-                    .title_top("parent")
-                    .fg(Color::Red),
-            )
-            .children(children)
-            .layout_params(LayoutParams {
-                width: Size::Fit,
-                height: Size::Fit,
-                direction: Direction::Horizontal,
-                padding: Padding::uniform(1),
-                ..Default::default()
-            })
-            .create();
+        let root = ElementCtx::element(
+            Block::bordered()
+                .border_type(BorderType::Rounded)
+                .title_top("parent")
+                .fg(Color::Red),
+        )
+        .children(children)
+        .layout_params(LayoutParams {
+            width: Size::Fit,
+            height: Size::Fit,
+            direction: Direction::Horizontal,
+            padding: Padding::uniform(1),
+            ..Default::default()
+        })
+        .create(&mut ctx);
         ctx.calculate_layout(root);
         ctx.render(root, buf.area, &mut buf);
         tracing::info!("\ntest_horizontal\n{}", buffer_to_string(&buf));
@@ -646,7 +629,7 @@ mod tests {
         let mut buf = Buffer::empty(Rect::new(0, 0, 50, 10));
         let mut ctx = ElementCtx::default();
         let child = |ctx: &mut ElementCtx, idx| {
-            ctx.element(
+            ElementCtx::element(
                 Block::bordered()
                     .border_type(BorderType::Rounded)
                     .title_top(format!("child #{idx}")),
@@ -656,25 +639,24 @@ mod tests {
                 height: Size::Fixed(3),
                 ..Default::default()
             })
-            .create()
+            .create(ctx)
         };
         let children = &[child(&mut ctx, 0), child(&mut ctx, 1)];
-        let root = ctx
-            .element(
-                Block::bordered()
-                    .border_type(BorderType::Rounded)
-                    .title_top("parent")
-                    .fg(Color::Red),
-            )
-            .children(children)
-            .layout_params(LayoutParams {
-                width: Size::Fit,
-                height: Size::Fit,
-                direction: Direction::Horizontal,
-                padding: Padding::uniform(1),
-                gap: 2,
-            })
-            .create();
+        let root = ElementCtx::element(
+            Block::bordered()
+                .border_type(BorderType::Rounded)
+                .title_top("parent")
+                .fg(Color::Red),
+        )
+        .children(children)
+        .layout_params(LayoutParams {
+            width: Size::Fit,
+            height: Size::Fit,
+            direction: Direction::Horizontal,
+            padding: Padding::uniform(1),
+            gap: 2,
+        })
+        .create(&mut ctx);
         ctx.calculate_layout(root);
         ctx.render(root, buf.area, &mut buf);
         tracing::info!("\ntest_gap\n{}", buffer_to_string(&buf));
@@ -684,75 +666,80 @@ mod tests {
         _ = tracing_subscriber::fmt::try_init();
         let mut buf = Buffer::empty(Rect::new(0, 0, 50, 24));
         let mut ctx = ElementCtx::default();
-        let child = |ctx: &mut ElementCtx, idx| {};
-        let children = &[child(&mut ctx, 0), child(&mut ctx, 1)];
-        let child0 = ctx
-            .element(
-                Block::bordered()
-                    .border_type(BorderType::Rounded)
-                    .title_top("child #0".to_string()),
-            )
-            .layout_params(LayoutParams {
-                width: Size::Fixed(10),
-                height: Size::Grow,
-                ..Default::default()
-            })
-            .create();
-        let child2 = ctx
-            .element(
-                Block::bordered()
-                    .border_type(BorderType::Rounded)
-                    .title_top("child #2".to_string()),
-            )
-            .layout_params(LayoutParams {
-                width: Size::Grow,
-                height: Size::Grow,
-                ..Default::default()
-            })
-            .create();
-        let child3 = ctx
-            .element(
-                Block::bordered()
-                    .border_type(BorderType::Rounded)
-                    .title_top("child #3".to_string()),
-            )
-            .layout_params(LayoutParams {
-                width: Size::Grow,
-                height: Size::Grow,
-                ..Default::default()
-            })
-            .create();
-        let child1 = ctx
-            .element(
-                Block::bordered()
-                    .border_type(BorderType::Rounded)
-                    .title_top("child #1".to_string()),
-            )
-            .layout_params(LayoutParams {
-                width: Size::Grow,
-                padding: Padding::uniform(1),
-                height: Size::Grow,
-                direction: Direction::Vertical,
-                ..Default::default()
-            })
-            .children(&[child2, child3])
-            .create();
-        let root = ctx
-            .element(
-                Block::bordered()
-                    .border_type(BorderType::Rounded)
-                    .title_top("parent")
-                    .fg(Color::Red),
-            )
-            .children(&[child0, child1])
-            .layout_params(LayoutParams {
-                width: Size::Fixed(36),
-                height: Size::Fixed(12),
-                direction: Direction::Horizontal,
-                padding: Padding::uniform(1),
-                ..Default::default()
-            })
-            .create();
+        let child0 = ElementCtx::element(
+            Block::bordered()
+                .border_type(BorderType::Rounded)
+                .title_top("sidebar".to_string()),
+        )
+        .children(&[ElementCtx::element(
+            Paragraph::new("this sidebar is so amazing it can have long text that wraps around")
+                .wrap(ratatui::widgets::Wrap { trim: false }),
+        )
+        .layout_params(LayoutParams {
+            width: Size::Grow,
+            height: Size::Grow,
+            ..Default::default()
+        })
+        .create(&mut ctx)])
+        .layout_params(LayoutParams {
+            width: Size::Fixed(10),
+            padding: Padding::uniform(1),
+            height: Size::Grow,
+            ..Default::default()
+        })
+        .create(&mut ctx);
+        let child2 = ElementCtx::element(
+            Block::bordered()
+                .border_type(BorderType::Rounded)
+                .title_top("child #2".to_string()),
+        )
+        .layout_params(LayoutParams {
+            width: Size::Grow,
+            height: Size::Grow,
+            ..Default::default()
+        })
+        .create(&mut ctx);
+        let child3 = ElementCtx::element(
+            Block::bordered()
+                .border_type(BorderType::Rounded)
+                .title_top("child #3".to_string()),
+        )
+        .layout_params(LayoutParams {
+            width: Size::Grow,
+            height: Size::Grow,
+            ..Default::default()
+        })
+        .create(&mut ctx);
+        let child1 = ElementCtx::element(
+            Block::bordered()
+                .border_type(BorderType::Rounded)
+                .title_top("child #1".to_string()),
+        )
+        .layout_params(LayoutParams {
+            width: Size::Grow,
+            padding: Padding::uniform(1),
+            gap: 1,
+            height: Size::Grow,
+            direction: Direction::Vertical,
+            ..Default::default()
+        })
+        .children(&[child2, child3])
+        .create(&mut ctx);
+        let root = ElementCtx::element(
+            Block::bordered()
+                .border_type(BorderType::Rounded)
+                .title_top("parent")
+                .fg(Color::Red),
+        )
+        .children(&[child0, child1])
+        .layout_params(LayoutParams {
+            width: Size::Fixed(36),
+            height: Size::Fixed(18),
+            direction: Direction::Horizontal,
+            padding: Padding::uniform(1),
+            ..Default::default()
+        })
+        .create(&mut ctx);
         ctx.calculate_layout(root);
         ctx.render(root, buf.area, &mut buf);
         tracing::info!("\ntest_grow\n{}", buffer_to_string(&buf));
@@ -763,7 +750,7 @@ mod tests {
         let mut buf = Buffer::empty(Rect::new(0, 0, 50, 20));
         let mut ctx = ElementCtx::default();
         let child = |ctx: &mut ElementCtx, idx, height| {
-            ctx.element(
+            ElementCtx::element(
                 Block::bordered()
                     .border_type(BorderType::Rounded)
                     .title_top(format!("child #{idx}")),
@@ -774,29 +761,28 @@ mod tests {
                 height: Size::Fixed(height),
                 ..Default::default()
             })
-            .create()
+            .create(ctx)
         };
         let subchildren = &[child(&mut ctx, 0, 6), child(&mut ctx, 1, 6)];
         let children = &[
             child(&mut ctx, 2, 14).children(&mut ctx, subchildren),
             child(&mut ctx, 3, 14),
         ];
-        let root = ctx
-            .element(
-                Block::bordered()
-                    .border_type(BorderType::Rounded)
-                    .title_top("parent")
-                    .fg(Color::Red),
-            )
-            .children(children)
-            .layout_params(LayoutParams {
-                width: Size::Fit,
-                height: Size::Fit,
-                direction: Direction::Horizontal,
-                padding: Padding::uniform(1),
-                ..Default::default()
-            })
-            .create();
+        let root = ElementCtx::element(
+            Block::bordered()
+                .border_type(BorderType::Rounded)
+                .title_top("parent")
+                .fg(Color::Red),
+        )
+        .children(children)
+        .layout_params(LayoutParams {
+            width: Size::Fit,
+            height: Size::Fit,
+            direction: Direction::Horizontal,
+            padding: Padding::uniform(1),
+            ..Default::default()
+        })
+        .create(&mut ctx);
         ctx.calculate_layout(root);
         ctx.render(root, buf.area, &mut buf);
         tracing::info!("\ntest_horizontal\n{}", buffer_to_string(&buf));
