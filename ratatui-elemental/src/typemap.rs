@@ -195,15 +195,6 @@ impl VecWidgets {
             to_any(ptr.as_ptr()).as_ref_unchecked()
         }
     }
-    fn get_widget_mut(&mut self, idx: usize) -> &mut (dyn ElWidget + 'static) {
-        assert!(idx < self.len);
-        unsafe {
-            let to_any = self.meta.extract;
-            let ptr = self.buf.add(idx);
-
-            to_any(ptr.as_ptr()).as_mut_unchecked()
-        }
-    }
 }
 
 struct Iter<'a, T> {
@@ -473,7 +464,7 @@ impl TypeArena {
 
     pub(crate) fn get<T: 'static + Clone>(&self, key: TypeKey) -> Option<&T> {
         let slot = self.slots.get::<TypeSlot<T>>(key.index);
-        if slot.vacant() {
+        if slot.vacant() || slot.version != key.version {
             return None;
         };
         unsafe {
@@ -487,7 +478,7 @@ impl TypeArena {
         let widget = self.slots.get_widget(key.index);
         // tracing::info!(?widget);
         let version = widget.key_version();
-        if version.is_multiple_of(2) {
+        if version.is_multiple_of(2) || version != key.version {
             return None;
         };
         Some(widget)
