@@ -1,9 +1,9 @@
-use std::sync::Arc;
+use std::{ops::Deref, sync::Arc};
 
 use bon::Builder;
 use derive_more as d;
 use glam::{U16Vec2, u16vec2};
-use hecs::{Bundle, Component, ComponentError, Entity, Query, World};
+use hecs::{Bundle, Component, ComponentError, DynamicBundle, Entity, Query, World};
 use ratatui::{
     buffer::Buffer,
     layout::{Direction, Rect},
@@ -43,6 +43,9 @@ struct ElementBundle {
 }
 
 impl ElementCtx {
+    pub fn new() -> Self {
+        Self::default()
+    }
     fn calculate_fit_sizes(&self, element: Element) -> Result<(), ComponentError> {
         let mut query = self
             .world
@@ -465,6 +468,8 @@ impl AxisSizes {
 
 pub type Element = Entity;
 
+pub struct TuiElMarker;
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Props {
     pub(crate) size: U16Vec2,
@@ -492,8 +497,23 @@ pub struct Height(pub Size);
 pub struct Gap(pub u16);
 #[derive(Debug, Clone, Copy, Default, d::Deref)]
 pub struct MainJustify(pub Justify);
-#[derive(Debug, Clone, Default, d::Deref)]
-pub struct Children(pub Arc<Vec<Element>>);
+#[derive(Debug, Clone, Default)]
+pub enum Children {
+    Some(Arc<Vec<Element>>),
+    #[default]
+    None,
+}
+
+impl Deref for Children {
+    type Target = [Element];
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Children::Some(items) => items.as_ref(),
+            Children::None => &[],
+        }
+    }
+}
 
 #[inline(always)]
 fn cross_size(dir: Direction, x: Width, y: Height) -> Size {
@@ -509,24 +529,6 @@ fn main_size(dir: Direction, x: Width, y: Height) -> Size {
         Direction::Vertical => *y,
     }
 }
-
-#[derive(Default, Builder)]
-pub struct LayoutParams {
-    #[builder(default)]
-    pub width: Size,
-    #[builder(default)]
-    pub height: Size,
-    #[builder(default)]
-    pub direction: Direction,
-    #[builder(default)]
-    pub padding: Padding,
-    #[builder(default)]
-    pub gap: u16,
-    #[builder(default)]
-    pub main_justify: Justify,
-}
-
-impl LayoutParams {}
 
 #[derive(Default, Clone, Copy, Debug)]
 pub enum Size {

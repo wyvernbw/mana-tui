@@ -6,13 +6,15 @@ license = "GPL-3.0"
 
 [workspace]
 resolver = "3"
-members = ["mana-tui-elemental"]
+members = ["mana-tui-elemental", "mana-tui-macros"]
 
 [workspace.lints.clippy]
 pedantic = "warn"
 missing-docs = { level = "deny", priority = 1 }
 
 [workspace.dependencies]
+mana-tui-elemental.path = "./mana-tui-elemental"
+mana-tui-macros.path = "./mana-tui-macros"
 bon = "3.8.1"
 ratatui = "0.30.0"
 smol = "2.0.2"
