@@ -1,7 +1,7 @@
 use convert_case::Casing;
-use proc_macro_crate::{FoundCrate, crate_name};
-use proc_macro2::Span;
-use quote::{format_ident, quote, quote_spanned};
+use quote::{format_ident, quote_spanned};
+
+use crate::utils::mana_tui_elemental;
 
 pub struct SubviewFn {
     func: syn::ItemFn,
@@ -12,19 +12,6 @@ impl syn::parse::Parse for SubviewFn {
         Ok(Self {
             func: input.parse()?,
         })
-    }
-}
-
-fn mana_tui_elemental() -> proc_macro2::TokenStream {
-    let found_crate =
-        crate_name("mana-tui-elemental").expect("mana-tui-elemental is present in `Cargo.toml`");
-
-    match found_crate {
-        FoundCrate::Itself => quote!(crate),
-        FoundCrate::Name(name) => {
-            let ident = syn::Ident::new(&name, Span::call_site());
-            quote!( #ident )
-        }
     }
 }
 

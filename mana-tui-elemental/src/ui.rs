@@ -28,7 +28,7 @@ use ratatui::{
     text::Text,
     widgets::{Block, Padding},
 };
-use tracing::instrument;
+use tracing::{Level, enabled, instrument};
 
 use crate::layout::{
     Children, ElWidget, Element, ElementCtx, Gap, Height, Justify, MainJustify, Props, Size,
@@ -86,12 +86,12 @@ use crate::layout::{
 /// # use mana_tui_elemental::prelude::*;
 ///
 /// let mut ctx = ElementCtx::new();
-/// let root = ui(Block::new());
-/// ctx.spawn_ui(root);
+/// let root = ui(Block::new())
 ///     .children((
 ///         ui(Block::new()),
 ///         ui(Block::new())
 ///     ));
+/// ctx.spawn_ui(root);
 ///
 /// ```
 ///
@@ -267,33 +267,6 @@ where
     }
 }
 
-/// TODO
-pub struct UiIterator<I>(I);
-
-impl<I> IntoUiBuilderList<()> for UiIterator<I>
-where
-    I: IntoIterator<Item = EntityBuilder>,
-{
-    fn into_list(self) -> impl Iterator<Item = EntityBuilder> {
-        self.0.into_iter()
-    }
-}
-
-/// TODO
-pub trait AsUiIter: Sized {
-    /// TODO
-    fn ui(self) -> UiIterator<Self>;
-}
-
-impl<I> AsUiIter for I
-where
-    I: Iterator<Item = EntityBuilder>,
-{
-    fn ui(self) -> UiIterator<Self> {
-        UiIterator(self)
-    }
-}
-
 impl IntoUiBuilderList<()> for &'static str {
     fn into_list(self) -> impl Iterator<Item = EntityBuilder> {
         [ui(Text::raw(self))
@@ -407,6 +380,18 @@ fn process_ui_system(world: &mut ElementCtx) {
             );
         }
     }
+    for (node, (_, width, height)) in world.query_mut::<(&Text, Option<&Width>, Option<&Height>)>()
+    {
+        if enabled!(Level::TRACE) && (width.is_none() || height.is_none()) {
+            tracing::trace!(?node, "processing default size for text",);
+        }
+        if width.is_none() {
+            buffer.insert_one(node, Width::grow());
+        }
+        if height.is_none() {
+            buffer.insert_one(node, Height::grow());
+        }
+    }
     buffer.run_on(world);
 
     let mut query = world.query::<&TuiElMarker>();
@@ -455,5 +440,49 @@ impl ElementCtx {
     }
 }
 
-/// TODO
+/// ui struct that can be spawned into the ecs. it is used to represent a tree of elements.
+/// subviews can return this type.
+///
+/// # Example
+///
+/// using manasx:
+///
+/// ```
+/// use mana_tui_elemental::prelude::*;
+/// use mana_tui_macros::{subview, ui};
+///
+/// #[subview]
+/// fn subview_test(name: &'static str) -> View {
+///     ui! {
+///         { format!("Hello {name}!") }
+///     }
+/// }
+///
+/// let root = ui! {
+///     <Block .title_top="sidebar" Width::fixed(10) Padding::uniform(1)>
+///         <Block .title_top="2" />
+///         <SubviewTest .name="there" />
+///     </Block>
+/// };
+/// ```
+///
+/// using builder sytnax:
+///
+/// ```
+/// use mana_tui_elemental::prelude::*;
+/// use mana_tui_macros::{subview, ui};
+///
+/// fn subview_test(name: &'static str) -> impl Into<View> {
+///     ui(Text::raw(format!("hello {name}")))
+/// }
+///
+/// let root = ui(Block::new().title_top("sidebar"))
+/// .with((
+///     Width::fixed(10), Padding::uniform(1)
+/// ))
+/// .children((
+///     ui(Block::new().title_top("2")),
+///     subview_test("there")
+/// ));
+///
 pub type View = EntityBuilder;

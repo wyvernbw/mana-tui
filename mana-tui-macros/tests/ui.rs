@@ -31,7 +31,7 @@ fn test() {
             Gap(2)
         >
             {
-                (0..3).map(|idx| ui! { <Block .rounded Width::fixed(4) Height::fixed(3) /> }).ui()
+                (0..3).map(|idx| ui! { <Block .rounded Width::fixed(4) Height::fixed(3) /> })
             }
         </Block>
     };
@@ -57,11 +57,10 @@ fn test() {
                                         }
                                 </Block>
                             })
-                            .ui()
                         }
                     </Block>
                 }
-            ).ui()
+            )
         }
         </Block>
     };
@@ -84,11 +83,10 @@ fn test() {
                                     { format!("{idx:02}") }
                                 </Block>
                             })
-                            .ui()
                         }
                     </Block>
                 }
-            ).ui()
+            )
         }
         </Block>
     };

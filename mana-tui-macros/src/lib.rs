@@ -1,12 +1,13 @@
-use manyhow::manyhow;
 use quote::quote;
 use syn::parse_macro_input;
 
 mod manasx;
 mod subview;
+mod utils;
 
 use crate::manasx::ManaElement;
 use crate::subview::SubviewFn;
+use crate::utils::mana_tui_elemental;
 
 /// # Example
 ///
@@ -15,20 +16,26 @@ use crate::subview::SubviewFn;
 /// use mana_tui_elemental::prelude::*;
 ///
 /// let root = ui! {
-///    <block .title_top="sidebar" Width(Size::Fixed(10)) Padding::uniform(1)>
-///        <block .title_top="2" />
-///    </block>
+///    <Block .title_top="sidebar" Width(Size::Fixed(10)) Padding::uniform(1)>
+///        <Block .title_top="2" />
+///    </Block>
 /// };
 ///```
-#[manyhow]
 #[proc_macro]
-pub fn ui(input: proc_macro::TokenStream) -> syn::Result<proc_macro::TokenStream> {
+pub fn ui(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     // let input = preprocess_tokens(input.into());
     // let input = input.into();
-    let tree = syn::parse::<ManaElement>(input)?;
-    let tokens = quote! { #tree };
+    let tree = parse_macro_input!(input as ManaElement);
+    let tree = quote! { #tree };
+    let mana_crate = mana_tui_elemental();
+    let tokens = quote! {
+        {
+            use #mana_crate::ui::__ui_internal;
+            #tree
+        }
+    };
 
-    Ok(tokens.into())
+    tokens.into()
 }
 
 #[proc_macro_attribute]

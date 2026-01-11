@@ -11,6 +11,7 @@ use ratatui::{
     layout::{Direction, Rect},
     widgets::{Padding, Widget},
 };
+use tracing::instrument;
 
 /// trait for rendering elements through a shared reference. this is automatically implemented
 /// for anything that implements [`Widget`], [`Clone`] and [`Component`]
@@ -41,11 +42,17 @@ where
 ///
 /// ```
 /// # use mana_tui_elemental::prelude::*;
+/// # use ratatui::buffer::Buffer;
+/// # use ratatui::layout::Rect;
 ///
 /// let mut ctx = ElementCtx::new();
+///
+/// let root = ui(Text::raw("hello world"));
 /// let root = ctx.spawn_ui(root);
+///
 /// ctx.calculate_layout(root).unwrap();
 /// // `&mut Buffer` from ratatui
+/// # let mut buf = Buffer::empty(Rect::new(0, 0, 50, 24));
 /// ctx.render(root, buf.area, &mut buf);
 /// ```
 ///
@@ -71,10 +78,10 @@ impl ElementCtx {
         let props = props_query.get().unwrap();
 
         if let Size::Fixed(size) = **width {
-            props.size.x = size
+            props.size.x = size;
         }
         if let Size::Fixed(size) = **height {
-            props.size.y = size
+            props.size.y = size;
         }
         let max_size = props.size.saturating_sub(u16vec2(
             padding.right + padding.left,
@@ -87,13 +94,12 @@ impl ElementCtx {
 
         children
             .iter()
-            .copied()
             .try_for_each(|child| -> Result<(), ComponentError> {
                 self.calculate_fit_sizes(child)?;
                 Ok(())
             })?;
 
-        for child in children.iter().copied() {
+        for child in children {
             let mut child_props = self.world.get::<&mut Props>(child)?;
             if width.should_clamp() {
                 child_props.size.x = child_props.size.x.clamp(0, max_size.x);
@@ -130,6 +136,7 @@ impl ElementCtx {
             }
             _ => {}
         }
+        tracing::trace!(target: "mana-tui::fit", ?element, ?props.size);
         Ok(())
     }
     fn sum_space_used(&self, elements: &[Element]) -> U16Vec2 {
@@ -161,7 +168,6 @@ impl ElementCtx {
         // cross axis
         children
             .iter()
-            .copied()
             .try_for_each(|child| -> Result<(), ComponentError> {
                 let mut child_query = self
                     .world
@@ -192,7 +198,6 @@ impl ElementCtx {
         }
         let mut buffer = children
             .iter()
-            .copied()
             .flat_map(|child| self.query_one::<GrowQuery>(child).ok().zip(Some(child)))
             .map(|(mut grow_query, entity)| {
                 let grow_query = grow_query.get().unwrap();
@@ -259,7 +264,7 @@ impl ElementCtx {
             query.props.size = entry.size.to_u16vec2(direction);
         }
 
-        for child in children.iter().copied() {
+        for child in children.iter() {
             self.calculate_grow_sizes(child)?;
         }
 
@@ -347,7 +352,6 @@ impl ElementCtx {
 
         children
             .iter()
-            .copied()
             .try_for_each(|child| -> Result<(), ComponentError> {
                 {
                     let mut child_props = self.world.get::<&mut Props>(child)?;
@@ -392,7 +396,7 @@ impl ElementCtx {
         if let Some(children) = children {
             let children = children.clone();
             drop(query);
-            for child in children.iter().copied() {
+            for child in children.iter() {
                 self.render(child, area, buf);
             }
         }
@@ -583,6 +587,7 @@ pub struct MainJustify(pub Justify);
 /// you can use this to iterate the children of an element like this
 ///
 /// ```rust
+/// # use mana_tui_elemental::prelude::*;
 /// # let mut ctx = ElementCtx::new();
 /// # let root = ui(Block::new())
 /// #     .with((Width(Size::Grow), Height(Size::Fixed(40))))
@@ -591,9 +596,9 @@ pub struct MainJustify(pub Justify);
 /// #         ui(Block::new())
 /// #     ));
 /// # let root = ctx.spawn_ui(root);
-/// let children = ctx.get::<&Chidlren>(root).unwrap();
-/// for child in children {
-///     let width = ctx.get::<&Width>(child);
+/// let children = ctx.get::<&Children>(root).unwrap();
+/// for child in children.iter() {
+///     let width = ctx.get::<&Width>(*child);
 /// }
 /// ```
 #[derive(Debug, Clone, Default)]
@@ -605,6 +610,12 @@ pub enum Children {
     None,
 }
 
+impl Children {
+    fn iter<'a>(&'a self) -> ChildrenIter<'a> {
+        self.into_iter()
+    }
+}
+
 impl Deref for Children {
     type Target = [Element];
 
@@ -613,6 +624,30 @@ impl Deref for Children {
             Children::Some(items) => items.as_ref(),
             Children::None => &[],
         }
+    }
+}
+
+/// Iterator over children IDs. this yields owned values since [`Elements`] is Copy.
+pub struct ChildrenIter<'a> {
+    inner: std::iter::Copied<std::slice::Iter<'a, Element>>,
+}
+
+impl<'a> Iterator for ChildrenIter<'a> {
+    type Item = Element;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+}
+
+impl<'a> IntoIterator for &'a Children {
+    type Item = Element;
+
+    type IntoIter = ChildrenIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        let inner = self.deref().iter().copied();
+        ChildrenIter { inner }
     }
 }
 

@@ -3,6 +3,9 @@
 //! ratatui layout library
 
 #![forbid(missing_docs)]
+
+extern crate self as mana_tui_elemental;
+
 pub mod layout;
 pub mod prelude;
 pub mod ui;
@@ -71,17 +74,25 @@ mod tests {
     fn test_gap() {
         _ = tracing_subscriber::fmt::try_init();
         _ = color_eyre::install();
+
         let mut ctx = ElementCtx::new();
         let root = ui! {
-            <Block .title_top="parent" Width::fit() Height::fit() Direction::Horizontal Padding::uniform(1) Gap(2)>
-                <Block Width::fixed(4) Height::fixed(3) />
-                <Block Width::fixed(4) Height::fixed(3) />
-                <Block Width::fixed(4) Height::fixed(3) />
+            <Block .rounded .title_top="parent" Width::fit() Height::fit() Direction::Horizontal Gap(2)>
+                <Block .rounded Width::fixed(4) Height::fixed(3)>
+                    "01"
+                </Block>
+                <Block .rounded Width::fixed(4) Height::fixed(3)>
+                    "02"
+                </Block>
+                <Block .rounded Width::fixed(4) Height::fixed(3)>
+                    "03"
+                </Block>
             </Block>
         };
         let root = ctx.spawn_ui(root);
+
         ctx.calculate_layout(root).unwrap();
-        let mut buf = Buffer::empty(Rect::new(0, 0, 50, 24));
+        let mut buf = Buffer::empty(Rect::new(0, 0, 24, 6));
         ctx.render(root, buf.area, &mut buf);
         tracing::info!("\ntest_gap\n{}", buffer_to_string(&buf));
     }
@@ -128,7 +139,7 @@ mod tests {
                                 }) }
                             </Container>
                         }
-                    ).ui()
+                    )
                 }
                 </Block>
             }
