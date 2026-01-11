@@ -521,10 +521,34 @@ impl Props {
 /// defaults to: `Size::Fit`
 #[derive(Debug, Clone, Copy, Default, d::Deref)]
 pub struct Width(pub Size);
+
 /// defines the [`Size`] on the y axis.
 /// defaults to: `Size::Fit`
 #[derive(Debug, Clone, Copy, Default, d::Deref)]
 pub struct Height(pub Size);
+
+macro_rules! impl_sizing_functions {
+    ($ty:ty) => {
+        impl $ty {
+            /// create a [`Size::Fixed`] value
+            pub const fn fixed(value: u16) -> Self {
+                Self(Size::Fixed(value))
+            }
+            /// create a [`Size::Fit`] value
+            pub const fn fit() -> Self {
+                Self(Size::Fit)
+            }
+            /// create a [`Size::Grow`] value
+            pub const fn grow() -> Self {
+                Self(Size::Grow)
+            }
+        }
+    };
+}
+
+impl_sizing_functions!(Width);
+impl_sizing_functions!(Height);
+
 /// defines the gap on the main axis between child elements.
 /// defaults to: 0`
 ///
@@ -549,10 +573,12 @@ pub struct Height(pub Size);
 /// ```
 #[derive(Debug, Clone, Copy, Default, d::Deref)]
 pub struct Gap(pub u16);
-#[derive(Debug, Clone, Copy, Default, d::Deref)]
+
 /// defines the alignment on the main axis. see [`Justify`] for more details.
 /// defaults to: [`Justify::Start`]
+#[derive(Debug, Clone, Copy, Default, d::Deref)]
 pub struct MainJustify(pub Justify);
+
 /// holds a list of entity ids to the element's children. this component is added automatically.
 /// you can use this to iterate the children of an element like this
 ///

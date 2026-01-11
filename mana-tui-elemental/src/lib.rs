@@ -11,7 +11,7 @@ pub mod ui;
 mod tests {
     use crate::prelude::*;
     use hecs::World;
-    use mana_tui_macros::ui;
+    use mana_tui_macros::{subview, ui};
     use ratatui::{buffer::Buffer, layout::Rect};
 
     fn buffer_to_string(buf: &Buffer) -> String {
@@ -73,10 +73,10 @@ mod tests {
         _ = color_eyre::install();
         let mut ctx = ElementCtx::new();
         let root = ui! {
-            <Block .title_top="parent" Width(Size::Fit) Height(Size::Fit) Direction::Horizontal Padding::uniform(1) Gap(2)>
-                <Block Width(Size::Fixed(4)) Height(Size::Fixed(3)) />
-                <Block Width(Size::Fixed(4)) Height(Size::Fixed(3)) />
-                <Block Width(Size::Fixed(4)) Height(Size::Fixed(3)) />
+            <Block .title_top="parent" Width::fit() Height::fit() Direction::Horizontal Padding::uniform(1) Gap(2)>
+                <Block Width::fixed(4) Height::fixed(3) />
+                <Block Width::fixed(4) Height::fixed(3) />
+                <Block Width::fixed(4) Height::fixed(3) />
             </Block>
         };
         let root = ctx.spawn_ui(root);
@@ -84,6 +84,61 @@ mod tests {
         let mut buf = Buffer::empty(Rect::new(0, 0, 50, 24));
         ctx.render(root, buf.area, &mut buf);
         tracing::info!("\ntest_gap\n{}", buffer_to_string(&buf));
+    }
+
+    #[test]
+    fn test_list_justify() {
+        _ = tracing_subscriber::fmt::try_init();
+        _ = color_eyre::install();
+
+        let mut ctx = ElementCtx::new();
+
+        #[subview]
+        fn numbered_box(idx: i32) -> View {
+            ui! {
+                <Block .rounded Width::fixed(4) Height::fixed(3)>
+                    { format!("{idx:02}") }
+                </Block>
+            }
+        }
+        #[subview]
+        fn container(justify: Justify) -> View {
+            ui! {
+                <Block
+                    .title_top={format!("{justify:?}")}
+                    .rounded
+                    MainJustify(justify)
+                    Width::fixed(24)
+                    Height::fixed(5)
+                    Direction::Horizontal
+                >
+                </Block>
+            }
+        }
+        #[subview]
+        fn root() -> View {
+            ui! {
+                <Block>
+                {
+                    Justify::iter().map(|justify|
+                        ui! {
+                            <Container .justify={justify}>
+                                { (0..3).map(|idx| ui!{
+                                    <NumberedBox .idx={idx} />
+                                }) }
+                            </Container>
+                        }
+                    ).ui()
+                }
+                </Block>
+            }
+        }
+        let root = ctx.spawn_ui(root());
+        ctx.calculate_layout(root).unwrap();
+
+        let mut buf = Buffer::empty(Rect::new(0, 0, 50, 32));
+        ctx.render(root, buf.area, &mut buf);
+        tracing::info!("\ntest_list_justify\n{}", buffer_to_string(&buf));
     }
 
     #[test]

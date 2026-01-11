@@ -2,7 +2,7 @@
 name = "mana-tui-elemental"
 version = "0.0.1"
 edition = "2024"
-license = "GPL-3.0"
+license = "MIT"
 
 [dependencies]
 ratatui.workspace = true

@@ -18,15 +18,17 @@
 //!
 //! ```
 
-use std::{collections::VecDeque, sync::Arc};
+use std::{borrow::Cow, collections::VecDeque, sync::Arc};
 
 use glam::U16Vec2;
-use hecs::{DynamicBundle, EntityBuilder};
+use hecs::{CommandBuffer, DynamicBundle, EntityBuilder};
 use ratatui::{
     buffer::Buffer,
     layout::{Direction, Rect},
-    widgets::Padding,
+    text::Text,
+    widgets::{Block, Padding},
 };
+use tracing::instrument;
 
 use crate::layout::{
     Children, ElWidget, Element, ElementCtx, Gap, Height, Justify, MainJustify, Props, Size,
@@ -110,63 +112,64 @@ use crate::layout::{
 /// ctx.spawn_ui(root);
 ///
 /// ```
+pub fn ui(w: impl IntoView) -> UiBuilder<ui_builder::Empty> {
+    __ui_internal(w.into_view())
+}
+
+/// trait that marks a type can be converted into a [`View`].
+///
+/// automatically implementeed for widgets.
+pub trait IntoView {
+    /// make the conversion to view.
+    fn into_view(self) -> View;
+}
+
+impl<W> IntoView for W
+where
+    W: ElWidget,
+{
+    fn into_view(self) -> View {
+        let mut builder = View::new();
+        fn render_system<E: ElWidget>(
+            ctx: &ElementCtx,
+            entity: hecs::Entity,
+            area: Rect,
+            buf: &mut Buffer,
+        ) {
+            if let Ok(widget) = ctx.world.get::<&E>(entity) {
+                widget.render_element(area, buf);
+            }
+        }
+        builder.add(self);
+        builder.add_bundle((
+            TuiElMarker,
+            Props {
+                size: U16Vec2::default(),
+                position: U16Vec2::default(),
+                render: render_system::<W>,
+            },
+        ));
+        builder
+    }
+}
+
+/// internal function.
 #[bon::builder]
+#[builder(builder_type = UiBuilder)]
 #[builder(finish_fn = done)]
-pub fn ui<W: ElWidget>(
-    #[builder(start_fn)] widget: W,
-    #[builder(field = EntityBuilder::new())] mut builder: EntityBuilder,
+pub fn __ui_internal(
+    #[builder(start_fn)] view: View,
     #[builder(setters(vis = "", name = children_flag))] _children: Option<()>,
     #[builder(setters(vis = "", name = child_flag))] _child: Option<()>,
 ) -> EntityBuilder {
-    fn render_system<E: ElWidget>(
-        ctx: &ElementCtx,
-        entity: hecs::Entity,
-        area: Rect,
-        buf: &mut Buffer,
-    ) {
-        if let Ok(widget) = ctx.world.get::<&E>(entity) {
-            widget.render_element(area, buf);
-        }
-    }
-    builder.add(widget);
-    builder.add_bundle((
-        TuiElMarker,
-        Props {
-            size: U16Vec2::default(),
-            position: U16Vec2::default(),
-            render: render_system::<W>,
-        },
-    ));
-    if !builder.has::<Width>() {
-        builder.add(Width(Size::Fit));
-    }
-    if !builder.has::<Height>() {
-        builder.add(Height(Size::Fit));
-    }
-    if !builder.has::<Direction>() {
-        builder.add(Direction::Vertical);
-    }
-    if !builder.has::<MainJustify>() {
-        builder.add(MainJustify(Justify::Start));
-    }
-    if !builder.has::<Gap>() {
-        builder.add(Gap::default());
-    }
-    if !builder.has::<Padding>() {
-        builder.add(Padding::default());
-    }
-    if !builder.has::<ChildrenBuilders>() {
-        builder.add(Children::None);
-    }
-    builder
+    view
 }
 
-impl<W, S> UiBuilder<W, S>
+impl<S> UiBuilder<S>
 where
     S: ui_builder::State,
     S::Children: ui_builder::IsUnset,
     S::Child: ui_builder::IsUnset,
-    W: ElWidget,
 {
     /// sets the children of the element. the argument must implement [`IntoUiBuilderList`], which is
     /// implemented automatically for `N`-tuples, [`Vec<T>`] and arrays.
@@ -176,22 +179,21 @@ where
     /// NOTE: if using vecs or arrays, call [`UiBuilder::done`] in order to obtain the [`hecs::EntityBuilder`] for each element
     /// in order to store it.
     #[must_use = "You can use the builder with ElementCtx::spawn_ui"]
-    pub fn children(
+    pub fn children<M>(
         mut self,
-        children: impl IntoUiBuilderList,
-    ) -> UiBuilder<W, impl ui_builder::State> {
-        let children = children.into_list().into_iter().collect::<Box<[_]>>();
-        self.builder.add(ChildrenBuilders(children));
+        children: impl IntoUiBuilderList<M>,
+    ) -> UiBuilder<impl ui_builder::State> {
+        let children = children.into_list().collect::<Box<[_]>>();
+        self.view.add(ChildrenBuilders(children));
         self.children_flag(())
     }
 }
 
-impl<W, S> UiBuilder<W, S>
+impl<S> UiBuilder<S>
 where
     S: ui_builder::State,
     S::Children: ui_builder::IsUnset,
     S::Child: ui_builder::IsUnset,
-    W: ElWidget,
 {
     /// like [`UiBuilder::child`], but only takes one child.
     ///
@@ -199,19 +201,15 @@ where
     ///
     /// this method exists as a convenience so you don't have to do `.children((child,))` with a 1-tuple.
     #[must_use = "You can use the builder with ElementCtx::spawn_ui"]
-    pub fn child(
-        mut self,
-        child: impl Into<EntityBuilder>,
-    ) -> UiBuilder<W, impl ui_builder::State> {
-        self.builder.add(ChildrenBuilders(Box::new([child.into()])));
+    pub fn child(mut self, child: impl Into<EntityBuilder>) -> UiBuilder<impl ui_builder::State> {
+        self.view.add(ChildrenBuilders(Box::new([child.into()])));
         self.child_flag(())
     }
 }
 
-impl<W, S> UiBuilder<W, S>
+impl<S> UiBuilder<S>
 where
     S: ui_builder::State,
-    W: ElWidget,
 {
     /// adds the dynamic bundle to the elments components.
     ///
@@ -235,18 +233,17 @@ where
     pub fn with(
         mut self,
         bundle: impl DynamicBundle,
-    ) -> UiBuilder<W, impl ui_builder::State<Children = S::Children, Child = S::Child>> {
-        self.builder.add_bundle(bundle);
+    ) -> UiBuilder<impl ui_builder::State<Children = S::Children, Child = S::Child>> {
+        self.view.add_bundle(bundle);
         self
     }
 }
 
-impl<W, S> From<UiBuilder<W, S>> for EntityBuilder
+impl<S> From<UiBuilder<S>> for EntityBuilder
 where
     S: ui_builder::IsComplete,
-    W: ElWidget,
 {
-    fn from(val: UiBuilder<W, S>) -> Self {
+    fn from(val: UiBuilder<S>) -> Self {
         val.done()
     }
 }
@@ -254,37 +251,84 @@ where
 /// trait that marks a type can be converted into an iterator over [`hecs::EntityBuilder`].
 ///
 /// automatically implemented for N-tuples, vecs and arrays.
-pub trait IntoUiBuilderList {
+pub trait IntoUiBuilderList<Marker = ()> {
     /// convert into iterator.
-    fn into_list(self) -> impl IntoIterator<Item = EntityBuilder>;
+    fn into_list(self) -> impl Iterator<Item = EntityBuilder>;
 }
 
-impl<U> IntoUiBuilderList for Vec<U>
+/// internal struct.
+pub struct IteratorMarker;
+impl<I> IntoUiBuilderList<IteratorMarker> for I
 where
-    U: Into<EntityBuilder>,
+    I: IntoIterator<Item = EntityBuilder>,
 {
-    fn into_list(self) -> impl IntoIterator<Item = EntityBuilder> {
-        self.into_iter().map(|value| value.into())
+    fn into_list(self) -> impl Iterator<Item = EntityBuilder> {
+        self.into_iter()
     }
 }
 
-impl<const N: usize, U> IntoUiBuilderList for [U; N]
+/// TODO
+pub struct UiIterator<I>(I);
+
+impl<I> IntoUiBuilderList<()> for UiIterator<I>
 where
-    U: Into<EntityBuilder>,
+    I: IntoIterator<Item = EntityBuilder>,
 {
-    fn into_list(self) -> impl IntoIterator<Item = EntityBuilder> {
-        self.into_iter().map(|value| value.into())
+    fn into_list(self) -> impl Iterator<Item = EntityBuilder> {
+        self.0.into_iter()
+    }
+}
+
+/// TODO
+pub trait AsUiIter: Sized {
+    /// TODO
+    fn ui(self) -> UiIterator<Self>;
+}
+
+impl<I> AsUiIter for I
+where
+    I: Iterator<Item = EntityBuilder>,
+{
+    fn ui(self) -> UiIterator<Self> {
+        UiIterator(self)
+    }
+}
+
+impl IntoUiBuilderList<()> for &'static str {
+    fn into_list(self) -> impl Iterator<Item = EntityBuilder> {
+        [ui(Text::raw(self))
+            .with((Width::grow(), Height::grow()))
+            .done()]
+        .into_iter()
+    }
+}
+
+impl IntoUiBuilderList<()> for String {
+    fn into_list(self) -> impl Iterator<Item = EntityBuilder> {
+        [ui(Text::raw(self))
+            .with((Width::grow(), Height::grow()))
+            .done()]
+        .into_iter()
+    }
+}
+
+impl<'a> IntoUiBuilderList<()> for Cow<'a, str> {
+    fn into_list(self) -> impl Iterator<Item = EntityBuilder> {
+        [ui(Text::raw(self.into_owned()))
+            .with((Width::grow(), Height::grow()))
+            .done()]
+        .into_iter()
     }
 }
 
 macro_rules! impl_into_ui_builder_list_for_tuples {
     ($($idx:tt $name:ident),+) => {
-        impl<$($name),+> IntoUiBuilderList for ($($name,)+)
+        impl<$($name),+> IntoUiBuilderList<()> for ($($name,)+)
         where
             $($name: Into<EntityBuilder>,)+
         {
-            fn into_list(self) -> impl IntoIterator<Item = EntityBuilder> {
-                [$(self.$idx.into()),+]
+            fn into_list(self) -> impl Iterator<Item = EntityBuilder> {
+                [$(self.$idx.into()),+].into_iter()
             }
         }
     };
@@ -306,6 +350,7 @@ impl_into_ui_builder_list_for_tuples!(0 U0, 1 U1, 2 U2, 3 U3, 4 U4, 5 U5, 6 U6, 
 
 pub(crate) struct ChildrenBuilders(pub(crate) Box<[EntityBuilder]>);
 
+#[instrument(skip(world))]
 fn process_ui_system(world: &mut ElementCtx) {
     let mut to_process: VecDeque<Element> = world
         .query_mut::<&ChildrenBuilders>()
@@ -334,6 +379,64 @@ fn process_ui_system(world: &mut ElementCtx) {
                 .unwrap();
         }
     }
+
+    let mut buffer = CommandBuffer::new();
+
+    for (node, (block, padding)) in world.query_mut::<(&mut Block, Option<&Padding>)>() {
+        if padding.is_none() {
+            tracing::trace!(?node, "processing default padding for block",);
+            let test_area = Rect {
+                x: 0,
+                y: 0,
+                width: 2,
+                height: 2,
+            };
+            let inner_area = block.inner(test_area);
+            let left = inner_area.left() - test_area.left();
+            let top = inner_area.top() - test_area.top();
+            let right = (test_area.height - inner_area.height).saturating_sub(1);
+            let bottom = (test_area.height - inner_area.height).saturating_sub(1);
+            buffer.insert_one(
+                node,
+                Padding {
+                    left,
+                    top,
+                    right,
+                    bottom,
+                },
+            );
+        }
+    }
+    buffer.run_on(world);
+
+    let mut query = world.query::<&TuiElMarker>();
+    for (node, _) in query.iter() {
+        let entity = world.entity(node).unwrap();
+        if !entity.has::<Width>() {
+            buffer.insert_one(node, Width(Size::Fit));
+        }
+        if !entity.has::<Height>() {
+            buffer.insert_one(node, Height(Size::Fit));
+        }
+        if !entity.has::<Direction>() {
+            buffer.insert_one(node, Direction::Vertical);
+        }
+        if !entity.has::<MainJustify>() {
+            buffer.insert_one(node, MainJustify(Justify::Start));
+        }
+        if !entity.has::<Gap>() {
+            buffer.insert_one(node, Gap::default());
+        }
+        if !entity.has::<Padding>() {
+            buffer.insert_one(node, Padding::default());
+        }
+        if !entity.has::<Children>() {
+            buffer.insert_one(node, Children::None);
+        }
+    }
+    drop(query);
+
+    buffer.run_on(world);
 }
 
 impl ElementCtx {
@@ -351,3 +454,6 @@ impl ElementCtx {
         root
     }
 }
+
+/// TODO
+pub type View = EntityBuilder;

@@ -16,6 +16,7 @@ use crate::layout::Props;
 pub use crate::layout::{
     Children, ElWidget, Element, ElementCtx, Gap, Height, Justify, MainJustify, Size, Width,
 };
+pub use crate::ui::AsUiIter;
 pub use ratatui::{
     layout::Direction,
     text::Text,

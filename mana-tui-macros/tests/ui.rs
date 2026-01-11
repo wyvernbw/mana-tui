@@ -1,15 +1,95 @@
 use mana_tui_elemental::prelude::*;
-use mana_tui_macros::ui;
+use mana_tui_macros::{subview, ui};
 
+#[subview]
+fn subview_test(name: &'static str) -> View {
+    ui! {
+        { format!("Hello {name}!") }
+    }
+}
+
+#[test]
 fn test() {
     let _ = ui! {
         <Block .title_top="sidebar" Width(Size::Fixed(10)) Padding::uniform(1)>
             <Block .title_top="2" />
+            <Paragraph .alignment={ratatui::layout::HorizontalAlignment::Center}/>
+            <SubviewTest .name="there" />
         </Block>
     };
 
     let _ = ui! {
         <Block .title_top="sidebar" Width(Size::Fixed(10)) Padding::uniform(1)>
+        </Block>
+    };
+
+    let _ = ui! {
+        <Block .title_top="parent 2"
+            .rounded
+            Width::fixed(24) Height::fixed(5)
+            Direction::Horizontal Padding::uniform(1)
+            Gap(2)
+        >
+            {
+                (0..3).map(|idx| ui! { <Block .rounded Width::fixed(4) Height::fixed(3) /> }).ui()
+            }
+        </Block>
+    };
+
+    let _ = ui! {
+        <Block>
+        {
+            Justify::iter().map(|justify|
+                ui! {
+                    <Block
+                        .title_top={format!("{justify:?}")}
+                        .rounded
+                        MainJustify(justify)
+                        Width::fixed(24)
+                        Height::fixed(5)
+                        Direction::Horizontal Padding::uniform(1)
+                    >
+                        {
+                            (0..3).map(|idx| ui! {
+                                <Block .rounded Width::fixed(4) Height::fixed(3)>
+                                        {
+                                            format!("wooow text")
+                                        }
+                                </Block>
+                            })
+                            .ui()
+                        }
+                    </Block>
+                }
+            ).ui()
+        }
+        </Block>
+    };
+    let _ = ui! {
+        <Block>
+        {
+            Justify::iter().map(|justify|
+                ui! {
+                    <Block
+                        .title_top={format!("{justify:?}")}
+                        .rounded
+                        MainJustify(justify)
+                        Width::fixed(24)
+                        Height::fixed(5)
+                        Direction::Horizontal
+                    >
+                        {
+                            (0..3).map(|idx| ui! {
+                                <Block .rounded Width::fixed(4) Height::fixed(3)>
+                                    { format!("{idx:02}") }
+                                </Block>
+                            })
+                            .ui()
+                        }
+                    </Block>
+                }
+            ).ui()
+        }
         </Block>
     };
 }
