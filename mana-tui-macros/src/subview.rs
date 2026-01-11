@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use convert_case::Casing;
 use quote::{format_ident, quote_spanned};
 
@@ -86,6 +84,7 @@ impl quote::ToTokens for SubviewFn {
             #[bon::builder(builder_type = #name)]
             #[builder(derive(Clone))]
             #[builder(finish_fn = into_view)]
+            #[builder(crate = ::mana_tui::prelude::bon)]
             #func
 
             impl #base_impl Default for #name #base_ty

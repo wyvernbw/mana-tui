@@ -5,13 +5,20 @@ edition = "2024"
 license = "GPL-3.0"
 
 [features]
-macros = ["dep:bon"]
+macros = ["dep:bon", "dep:mana-tui-macros"]
+nightly = ["mana-tui-elemental/nightly"]
 
 [workspace]
 resolver = "3"
-members = ["mana-tui-elemental", "mana-tui-macros"]
+members = [
+  "mana-tui-elemental",
+  "mana-tui-macros",
+  # examples:
+  "examples/todo-app",
+]
 
 [dependencies]
+mana-tui-macros = { workspace = true, optional = true }
 mana-tui-elemental.workspace = true
 bon = { workspace = true, optional = true }
 
@@ -34,3 +41,4 @@ ratatui.workspace = true
 mana-tui-macros.workspace = true
 mana-tui-elemental.workspace = true
 hecs.workspace = true
+

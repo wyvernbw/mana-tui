@@ -10,11 +10,11 @@ proc-macro = true
 proc-macro2 = "1.0.105"
 syn = { version = "2.0.114", features = ["full", "extra-traits"] }
 quote = "1.0.43"
-bon.workspace = true
 convert_case = "0.10.0"
+bon.workspace = true
 
 [dev-dependencies]
-mana-tui-elemental = {workspace = true, features = ["nightly"]}
+mana-tui = { path = "..", features = ["nightly"]}
 ratatui.workspace = true
 
 [lints]

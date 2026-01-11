@@ -13,7 +13,7 @@ use crate::utils::mana_tui_elemental;
 ///
 ///```
 /// use mana_tui_macros::ui;
-/// use mana_tui_elemental::prelude::*;
+/// use mana_tui::prelude::*;
 ///
 /// let root = ui! {
 ///    <Block .title_top="sidebar" Width(Size::Fixed(10)) Padding::uniform(1)>

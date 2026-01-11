@@ -26,6 +26,8 @@ pub use ratatui::{
 #[cfg(feature = "nightly")]
 pub use crate::ui::AsChildren;
 
+pub use bon;
+
 pub use crate::ui::{IntoUiBuilderList, IntoView, IteratorMarker, UiBuilder, View, ui};
 
 /// create element builder.

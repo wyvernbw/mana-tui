@@ -16,6 +16,7 @@ hecs.workspace = true
 glam = "0.30.9"
 
 [dev-dependencies]
-mana-tui-macros.workspace = true
+mana-tui = { path = "..", features = ["nightly", "macros"] }
+mana-tui-macros.workspace = true 
 tracing-subscriber = "0.3.22"
 color-eyre = "*"

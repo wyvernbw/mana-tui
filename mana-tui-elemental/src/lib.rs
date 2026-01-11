@@ -10,9 +10,8 @@ pub mod ui;
 
 #[cfg(test)]
 mod tests {
-    use crate::prelude::*;
     use hecs::World;
-    use mana_tui_macros::{subview, ui};
+    use mana_tui::prelude::*;
     use ratatui::{buffer::Buffer, layout::Rect, widgets::Wrap};
 
     fn buffer_to_string(buf: &Buffer) -> String {
