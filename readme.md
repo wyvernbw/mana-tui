@@ -9,6 +9,14 @@ ECS based library for builiding performant TUI libraries when you need more than
 
 ### Layout Engine
 
+```plaintext
+╭parent──────────╮
+│╭──╮  ╭──╮  ╭──╮│
+││01│  │02│  │03││
+│╰──╯  ╰──╯  ╰──╯│
+╰────────────────╯
+```
+
 Mana-tui has a full flexbox style layout engine in [`mana-tui-elemental`], the
 foundation of the library, that is more powerful than ratatui's built in layout
 options and easier to work with. In terms of interacting with it, the biggest
@@ -143,6 +151,33 @@ let expected = Buffer::with_lines(vec![
 assert_eq!(buf, expected);
 ```
 
+This is not a one to one translation but you get the idea. the `ui!` macro just
+generates builder syntax code. `sideview` attribute makes any function (supports
+generics and impl trait arguments) that returns View into a subview that can be
+used as a tag inside the `ui!` macro. This might be familiar to you if you know
+react, but manasx subviews cannot hold state (this is why i named them subviews
+and not components) and that is on purpose. I think managing your app state
+through the ECS by writing systems is cleaner and more performant.
+
+Arbitrary expression blocks and iterators are also supported:
+
+```rust ignore
+#[subview]
+fn root() -> View {
+    ui! {
+        <Block>
+        {
+          (0..3).map(|idx| ui!{
+              <NumberedBox .idx={idx} />
+          })
+        }
+        </Block>
+    }
+}
+```
+
+Note that in both cases the api is still being ironed out so it still has a few quirks.
+
 ## architecture:
 
 - [ ] `mana-tui`
@@ -154,6 +189,6 @@ assert_eq!(buf, expected);
   - provides the basic element abstraction and layout engine
 - built on top of [ratatui](https://ratatui.rs/) & [hecs](https://docs.rs/hecs/latest/hecs/)
 
-[`mana-tui-elemental`]: ./mana-tui-elemental/readme.md
-[`mana-tui-macros`]: ./mana-tui-macros/readme.md
+[`mana-tui-elemental`]: ./mana-tui-elemental/
+[`mana-tui-macros`]: ./mana-tui-macros/
 
