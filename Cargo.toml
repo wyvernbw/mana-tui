@@ -8,6 +8,9 @@ license = "GPL-3.0"
 resolver = "3"
 members = ["mana-tui-elemental", "mana-tui-macros"]
 
+[dependencies]
+mana-tui-elemental.workspace = true
+
 [workspace.lints.clippy]
 pedantic = "warn"
 

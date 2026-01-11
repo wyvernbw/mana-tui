@@ -1,7 +1,4 @@
-//! # ratatui-elemental
-//!
-//! ratatui layout library
-
+#![doc = include_str!("../readme.md")]
 #![forbid(missing_docs)]
 #![cfg_attr(feature = "nightly", feature(trait_alias))]
 

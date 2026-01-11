@@ -467,7 +467,7 @@ impl ElementCtx {
     /// use this method instead of [`hecs::World::spawn`] as it also spawns all children
     /// recursively using a queue in `O(n)` time where `n` is the number of elements with children.
     ///
-    /// also see [`ui`], [`Element`][crate::layout::Element]
+    /// also see [`ui`], [`Element`]
     pub fn spawn_ui(&mut self, ui: impl Into<EntityBuilder>) -> Element {
         let mut ui = ui.into();
         let ui = ui.build();

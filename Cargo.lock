@@ -249,7 +249,6 @@ dependencies = [
  "crossterm_winapi",
  "derive_more",
  "document-features",
- "futures-core",
  "mio",
  "parking_lot",
  "rustix",
@@ -500,12 +499,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
-name = "futures-core"
-version = "0.3.31"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05f29059c0c2090612e8d742178b0580d2dc940c837851ad723096f87af6663e"
-
-[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -748,6 +741,9 @@ dependencies = [
 [[package]]
 name = "mana-tui"
 version = "0.0.1"
+dependencies = [
+ "mana-tui-elemental",
+]
 
 [[package]]
 name = "mana-tui-elemental"
@@ -755,7 +751,6 @@ version = "0.0.1"
 dependencies = [
  "bon",
  "color-eyre",
- "crossterm",
  "derive_more",
  "glam",
  "hecs",
