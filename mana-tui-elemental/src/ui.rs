@@ -21,12 +21,13 @@
 use std::{borrow::Cow, collections::VecDeque, sync::Arc};
 
 use glam::U16Vec2;
-use hecs::{CommandBuffer, DynamicBundle, EntityBuilder};
+use hecs::{CommandBuffer, DynamicBundle, Entity, EntityBuilder, Or, Query};
 use ratatui::{
     buffer::Buffer,
     layout::{Direction, Rect},
-    text::Text,
-    widgets::{Block, Padding},
+    style::Style,
+    text::{Line, Span, Text},
+    widgets::{Block, Padding, Paragraph},
 };
 use tracing::{Level, enabled, instrument};
 
@@ -363,7 +364,7 @@ pub(crate) struct ChildrenBuilders(pub(crate) Box<[EntityBuilder]>);
 #[instrument(skip(world))]
 fn process_ui_system(world: &mut ElementCtx) {
     let mut to_process: VecDeque<Element> = world
-        .query_mut::<&ChildrenBuilders>()
+        .query_mut::<(Entity, &ChildrenBuilders)>()
         .into_iter()
         .map(|(e, _)| e)
         .collect();
@@ -371,6 +372,7 @@ fn process_ui_system(world: &mut ElementCtx) {
     while let Some(node) = to_process.pop_front() {
         if let Ok(builders) = world.remove_one::<ChildrenBuilders>(node) {
             let mut builders = builders.0;
+            let style = world.get::<&Style>(node).ok().map(|style| *style);
             world.reserve_entities(builders.len() as u32);
             let children = builders
                 .iter_mut()
@@ -378,6 +380,9 @@ fn process_ui_system(world: &mut ElementCtx) {
                     let builder = builder.build();
                     let has_children = builder.has::<ChildrenBuilders>();
                     let entity = world.spawn(builder);
+                    if let Some(parent_style) = style {
+                        let _ = world.insert_one(entity, parent_style);
+                    }
                     if has_children {
                         to_process.push_back(entity);
                     }
@@ -392,7 +397,7 @@ fn process_ui_system(world: &mut ElementCtx) {
 
     let mut buffer = CommandBuffer::new();
 
-    for (node, (block, padding)) in world.query_mut::<(&mut Block, Option<&Padding>)>() {
+    for (node, block, padding) in world.query_mut::<(Entity, &mut Block, Option<&Padding>)>() {
         if padding.is_none() {
             tracing::trace!(?node, "processing default padding for block",);
             let test_area = Rect {
@@ -404,7 +409,7 @@ fn process_ui_system(world: &mut ElementCtx) {
             let inner_area = block.inner(test_area);
             let left = inner_area.left() - test_area.left();
             let top = inner_area.top() - test_area.top();
-            let right = (test_area.height - inner_area.height).saturating_sub(1);
+            let right = (test_area.width - inner_area.width).saturating_sub(1);
             let bottom = (test_area.height - inner_area.height).saturating_sub(1);
             buffer.insert_one(
                 node,
@@ -417,21 +422,46 @@ fn process_ui_system(world: &mut ElementCtx) {
             );
         }
     }
-    for (node, (_, width, height)) in world.query_mut::<(&Text, Option<&Width>, Option<&Height>)>()
+
+    #[derive(Query)]
+    enum TextQuery<'a> {
+        Text(&'a Text<'a>),
+        Paragraph(&'a Paragraph<'a>),
+        Line(&'a Line<'a>),
+        Span(&'a Span<'a>),
+    }
+
+    for (node, text_query, width, height) in
+        world.query_mut::<(Entity, TextQuery, Option<&Width>, Option<&Height>)>()
     {
         if enabled!(Level::TRACE) && (width.is_none() || height.is_none()) {
             tracing::trace!(?node, "processing default size for text",);
         }
+        let new_size = match text_query {
+            TextQuery::Text(text) => Some((text.width(), text.height())),
+            TextQuery::Paragraph(_) => None,
+            TextQuery::Line(line) => Some((line.width(), 1)),
+            TextQuery::Span(span) => Some((span.width(), 1)),
+        };
         if width.is_none() {
-            buffer.insert_one(node, Width::grow());
+            if let Some((width, _)) = new_size {
+                buffer.insert_one(node, Width::fixed(width as u16));
+            } else {
+                buffer.insert_one(node, Width::grow());
+            }
         }
         if height.is_none() {
-            buffer.insert_one(node, Height::grow());
+            if let Some((_, height)) = new_size {
+                buffer.insert_one(node, Height::fixed(height as u16));
+            } else {
+                buffer.insert_one(node, Height::grow());
+            }
         }
     }
+
     buffer.run_on(world);
 
-    let mut query = world.query::<&TuiElMarker>();
+    let mut query = world.query::<(Entity, &TuiElMarker)>();
     for (node, _) in query.iter() {
         let entity = world.entity(node).unwrap();
         if !entity.has::<Width>() {

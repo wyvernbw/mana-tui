@@ -113,6 +113,16 @@ struct ManaTagData {
     components: ComponentVec,
 }
 
+impl ManaTagData {
+    pub fn name(&self) -> syn::Result<String> {
+        let name = match self.ident {
+            ManaName::Ident(ref ident) => ident.to_string(),
+            ManaName::Path(ref expr_path) => expr_path.path.require_ident()?.to_string(),
+        };
+        Ok(name)
+    }
+}
+
 #[derive(Debug, Clone)]
 struct ManaAttr {
     _dot: Token![.],
@@ -264,6 +274,13 @@ struct Element {
 }
 
 #[derive(Debug, Clone)]
+struct TextElement {
+    open: OpenTag,
+    text: syn::LitStr,
+    close: CloseTag,
+}
+
+#[derive(Debug, Clone)]
 enum Children {
     Block(ChildrenBlock),
     List(ChildrenList),
@@ -292,6 +309,7 @@ pub enum ManaElement {
     Plaintext(syn::LitStr),
     ExprBlock(BraceBlock),
     Element(Box<Element>),
+    TextElement(TextElement),
     SelfClosing(OpenTag),
 }
 
@@ -317,6 +335,25 @@ impl Parse for ManaElement {
         if open.sl.is_some() {
             return Ok(Self::SelfClosing(open));
         }
+
+        match open.data.name()?.as_str() {
+            "Text" | "Paragraph" | "Span" | "Line" => {
+                let text = input.parse()?;
+                let close = input.parse::<CloseTag>()?;
+                if close.ident != open.data.ident {
+                    return Err(syn::Error::new(
+                        close.ident.span(),
+                        format!(
+                            "closing tag </{}> does not match opening <{}>",
+                            close.ident, open.data.ident
+                        ),
+                    ));
+                }
+                return Ok(Self::TextElement(TextElement { open, text, close }));
+            }
+            _ => {}
+        }
+
         let children = input.parse()?;
         let close = input.parse::<CloseTag>()?;
         if close.ident != open.data.ident {
@@ -450,6 +487,9 @@ impl quote::ToTokens for ManaElement {
             ManaElement::Element(element) => {
                 tokens.extend(quote! { #element.done() });
             }
+            Self::TextElement(element) => {
+                tokens.extend(quote! { #element.done() });
+            }
             ManaElement::SelfClosing(open_tag) => {
                 let span = open_tag.span();
                 tokens.extend(quote_spanned! { span => { #open_tag.done() } });
@@ -580,6 +620,30 @@ impl quote::ToTokens for Element {
         tokens.extend(quote! {
             #init #children
         });
+    }
+}
+
+impl quote::ToTokens for TextElement {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let TextElement {
+            open,
+            text,
+            close: _,
+        } = self;
+        let constructor = match open.data.ident.to_string().as_str() {
+            "Text" | "Line" | "Span" => quote! { raw },
+            "Paragraph" => quote! { new },
+            _ => todo!(),
+        };
+        let ManaTagData {
+            ref ident,
+            ref attrs,
+            ref components,
+        } = open.data;
+        let out = quote! {
+            __ui_internal(#ident::#constructor(format!(#text)) #attrs .into_view())#components
+        };
+        tokens.extend(out);
     }
 }
 

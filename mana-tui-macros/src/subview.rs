@@ -1,5 +1,6 @@
 use convert_case::Casing;
 use quote::{format_ident, quote_spanned};
+use syn::{PatType, spanned::Spanned};
 
 use crate::utils::mana_tui_elemental;
 
@@ -56,9 +57,10 @@ impl quote::ToTokens for SubviewFn {
                     default: None,
                 }));
         }
-        let (base_impl, base_ty, base_wh) = generics.split_for_impl();
-        let builder_generics = BuilderGenerics::new(&generics, &builder_module);
-        let (impl_generics, ty_generics, where_clause) = builder_generics.0.split_for_impl();
+        let builder_generics = BuilderGenerics::new(&generics, func, &builder_module);
+        let (impl_generics, ty_generics, where_clause) =
+            builder_generics.full_generics.split_for_impl();
+        let (base_impl, base_ty, base_wh) = builder_generics.implicit_lifetimes.split_for_impl();
         let where_clause_is_complete = where_clause.cloned().map(|mut wh| {
             let mut complete_bound = syn::punctuated::Punctuated::new();
             complete_bound.push(syn::TypeParamBound::Trait(syn::TraitBound {
@@ -82,7 +84,6 @@ impl quote::ToTokens for SubviewFn {
             span =>
 
             #[bon::builder(builder_type = #name)]
-            #[builder(derive(Clone))]
             #[builder(finish_fn = into_view)]
             #[builder(crate = ::mana_tui::prelude::bon)]
             #func
@@ -108,11 +109,32 @@ impl quote::ToTokens for SubviewFn {
 }
 
 #[derive(Debug, Clone)]
-struct BuilderGenerics(syn::Generics);
+struct BuilderGenerics {
+    implicit_lifetimes: syn::Generics,
+    full_generics: syn::Generics,
+}
 
 impl BuilderGenerics {
-    fn new(initial: &syn::Generics, builder_module: &syn::Ident) -> Self {
-        let mut generics = initial.clone();
+    fn new(initial: &syn::Generics, func_def: &syn::ItemFn, builder_module: &syn::Ident) -> Self {
+        let mut lifetimes = initial.clone();
+        let mut implicit_lifetimes = 0;
+        for arg in &func_def.sig.inputs {
+            match arg {
+                syn::FnArg::Receiver(_) => {}
+                syn::FnArg::Typed(syn::PatType { ty, .. }) => {
+                    if let syn::Type::Reference(reference) = ty.as_ref()
+                        && reference.lifetime.is_none()
+                    {
+                        implicit_lifetimes += 1;
+                        let ident = format!("'f{implicit_lifetimes}");
+                        lifetimes.params.push(syn::GenericParam::Lifetime(
+                            syn::LifetimeParam::new(syn::Lifetime::new(&ident, reference.span())),
+                        ));
+                    }
+                }
+            }
+        }
+        let mut generics = lifetimes.clone();
         generics
             .params
             .push(syn::GenericParam::Type(syn::TypeParam {
@@ -142,12 +164,15 @@ impl BuilderGenerics {
             }));
         _ = where_clause.predicates.pop_punct();
         generics.where_clause = Some(where_clause);
-        Self(generics)
+        Self {
+            full_generics: generics,
+            implicit_lifetimes: lifetimes,
+        }
     }
 }
 
 impl quote::ToTokens for BuilderGenerics {
     fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
-        self.0.to_tokens(tokens);
+        self.full_generics.to_tokens(tokens);
     }
 }

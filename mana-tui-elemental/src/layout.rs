@@ -12,7 +12,7 @@ use hecs::{Bundle, CommandBuffer, Component, ComponentError, DynamicBundle, Enti
 use ratatui::{
     buffer::Buffer,
     layout::{Direction, Rect},
-    widgets::{Padding, Widget},
+    widgets::{Padding, Paragraph, Widget},
 };
 
 /// trait for rendering elements through a shared reference. this is automatically implemented
@@ -74,9 +74,9 @@ impl ElementCtx {
     fn calculate_fit_sizes(&self, element: Element) -> Result<(), ComponentError> {
         let mut query = self
             .world
-            .query_one::<(&Width, &Height, &Padding, &Children, &Direction)>(element)?;
+            .query_one::<(&Width, &Height, &Padding, &Children, &Direction)>(element);
         let (width, height, padding, children, direction) = query.get().unwrap();
-        let mut props_query = self.world.query_one::<&mut Props>(element)?;
+        let mut props_query = self.world.query_one::<&mut Props>(element);
         let props = props_query.get().unwrap();
 
         if let Size::Fixed(size) = **width {
@@ -120,7 +120,7 @@ impl ElementCtx {
             &Children,
             &Direction,
             &Gap,
-        )>(element)?;
+        )>(element);
         let (props, width, height, padding, children, direction, gap) = query.get().unwrap();
 
         space_used = space_used.pad(*padding, *direction);
@@ -157,7 +157,7 @@ impl ElementCtx {
     ) -> Result<(), ComponentError> {
         let mut query = self
             .world
-            .query_one::<(&mut Props, &Padding, &Children, &Direction, &Gap)>(element)?;
+            .query_one::<(&mut Props, &Padding, &Children, &Direction, &Gap)>(element);
         let (props, &padding, children, &direction, &gap) = query.get().unwrap();
 
         let children = children.clone();
@@ -178,7 +178,7 @@ impl ElementCtx {
         if is_root {
             let mut query = self
                 .world
-                .query_one::<(&mut Props, &Width, &Height)>(element)?;
+                .query_one::<(&mut Props, &Width, &Height)>(element);
             let (props, width, height) = query.get().unwrap();
             // if the root element is set to grow, we want it to take up the entire
             // screen.
@@ -194,9 +194,7 @@ impl ElementCtx {
         children
             .iter()
             .try_for_each(|child| -> Result<(), ComponentError> {
-                let mut child_query = self
-                    .world
-                    .query_one::<(&mut Props, &Width, &Height)>(child)?;
+                let mut child_query = self.world.query_one::<(&mut Props, &Width, &Height)>(child);
                 let (child_props, child_width, child_height) = child_query.get().unwrap();
                 if !cross_size(direction, *child_width, *child_height).is_grow() {
                     return Ok(());
@@ -223,7 +221,7 @@ impl ElementCtx {
         }
         let mut buffer = children
             .iter()
-            .flat_map(|child| self.query_one::<GrowQuery>(child).ok().zip(Some(child)))
+            .map(|child| (self.query_one::<GrowQuery>(child), child))
             .map(|(mut grow_query, entity)| {
                 let grow_query = grow_query.get().unwrap();
                 let is_grow = main_size(direction, *grow_query.width, *grow_query.height).is_grow();
@@ -279,12 +277,15 @@ impl ElementCtx {
                             entry.size.main_axis = target_size;
                         }
                     }
+                    if remaining == 0 {
+                        break;
+                    }
                 }
             }
         }
 
         for entry in buffer {
-            let mut query = self.query_one::<GrowQuery>(entry.entity)?;
+            let mut query = self.query_one::<GrowQuery>(entry.entity);
             let query = query.get().unwrap();
             query.props.size = entry.size.to_u16vec2(direction);
         }
@@ -304,7 +305,7 @@ impl ElementCtx {
             &Gap,
             &MainJustify,
             &CrossJustify,
-        )>(root)?;
+        )>(root);
         let (&props, &padding, children, &dir, &gap, &main_justify, &cross_justify) =
             query.get().unwrap();
         let children = children.clone();
@@ -312,8 +313,10 @@ impl ElementCtx {
         let space_used = self.sum_space_used(&children);
         let space_used = axify(space_used, dir).main_axis;
         let space_used = space_used + *gap * children.len().saturating_sub(1) as u16;
-        let inner_size =
-            props.size - u16vec2(padding.left + padding.right, padding.top + padding.bottom);
+        let inner_size = props.size.saturating_sub(u16vec2(
+            padding.left + padding.right,
+            padding.top + padding.bottom,
+        ));
         let remaining_size = axify(props.size, dir)
             .shrink(padding, dir)
             .main_axis
@@ -348,33 +351,45 @@ impl ElementCtx {
             MainJustify::SpaceBetween if children.is_empty() => AlignValues::default(),
             MainJustify::SpaceBetween => {
                 let div_by = (children.len().saturating_sub(1)) as u16;
-                let space = remaining_size / div_by;
-                let space_rem = remaining_size % div_by;
-                AlignValues {
-                    start: 0,
-                    inbetween: space,
-                    remainder: space_rem,
+                if div_by == 0 {
+                    AlignValues::default()
+                } else {
+                    let space = remaining_size / div_by;
+                    let space_rem = remaining_size % div_by;
+                    AlignValues {
+                        start: 0,
+                        inbetween: space,
+                        remainder: space_rem,
+                    }
                 }
             }
             MainJustify::SpaceAround if children.is_empty() => AlignValues::default(),
             MainJustify::SpaceAround => {
                 let div_by = (children.len() * 2) as u16;
-                let space = remaining_size / div_by;
-                let space_rem = remaining_size % div_by;
-                AlignValues {
-                    start: space,
-                    inbetween: space * 2,
-                    remainder: space_rem,
+                if div_by == 0 {
+                    AlignValues::default()
+                } else {
+                    let space = remaining_size / div_by;
+                    let space_rem = remaining_size % div_by;
+                    AlignValues {
+                        start: space,
+                        inbetween: space * 2,
+                        remainder: space_rem,
+                    }
                 }
             }
             MainJustify::SpaceEvenly if children.is_empty() => AlignValues::default(),
             MainJustify::SpaceEvenly => {
                 let div_by = (children.len() * 2) as u16 + 2;
-                let space = remaining_size / div_by;
-                AlignValues {
-                    start: space * 2,
-                    inbetween: space * 2,
-                    remainder: 0,
+                if div_by == 0 {
+                    AlignValues::default()
+                } else {
+                    let space = remaining_size / div_by;
+                    AlignValues {
+                        start: space * 2,
+                        inbetween: space * 2,
+                        remainder: 0,
+                    }
                 }
             }
             MainJustify::End => AlignValues {
@@ -441,8 +456,7 @@ impl ElementCtx {
     pub fn render(&self, root: Element, area: Rect, buf: &mut Buffer) {
         let mut query = self
             .world
-            .query_one::<(&mut Props, Option<&Children>)>(root)
-            .expect("mana-tui-elemental bug: root element must have props");
+            .query_one::<(&mut Props, Option<&Children>)>(root);
         let (props, children) = query.get().unwrap();
         let area = props.split_area(area);
         (props.render)(self, root, area, buf);
@@ -827,7 +841,7 @@ impl ManaComponent for Center {
     fn run_postprocess(ctx: &mut ElementCtx, _: &mut CommandBuffer) {
         // do not use the shared buffer
         let mut commands = CommandBuffer::new();
-        for (node, _) in ctx.query_mut::<&Center>() {
+        for (node, _) in ctx.query_mut::<(Entity, &Center)>() {
             commands.insert_one(node, MainJustify::Center);
             commands.insert_one(node, CrossJustify::Center);
         }
@@ -838,7 +852,7 @@ impl ManaComponent for Center {
 impl Size {
     fn should_clamp(&self) -> bool {
         match self {
-            Size::Fixed(_) => true,
+            Size::Fixed(_) => false,
             Size::Fit => false,
             Size::Grow => false,
         }

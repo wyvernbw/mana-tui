@@ -13,6 +13,7 @@ mod tests {
     use hecs::World;
     use mana_tui::prelude::*;
     use ratatui::{buffer::Buffer, layout::Rect, widgets::Wrap};
+    use strum::IntoEnumIterator;
 
     fn buffer_to_string(buf: &Buffer) -> String {
         buf.content()
@@ -252,8 +253,8 @@ mod tests {
         let mut world = World::new();
         let a = world.spawn((0i32, "hi"));
         let b = world.spawn((1i32, "hello"));
-        let mut query1 = world.query_one::<&mut i32>(a).unwrap();
-        let mut query2 = world.query_one::<&mut i32>(b).unwrap();
+        let mut query1 = world.query_one::<&mut i32>(a);
+        let mut query2 = world.query_one::<&mut i32>(b);
         let a = query1.get();
         let b = query2.get();
         assert_ne!(a, b);

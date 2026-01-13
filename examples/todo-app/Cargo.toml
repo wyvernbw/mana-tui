@@ -10,4 +10,4 @@ edition = "2024"
 color-eyre = "0.6.3"
 crossterm = "0.29.0"
 mana-tui = { version = "0.0.1", path = "../..", features = ["macros"] }
-ratatui = "0.30.0"
+ratatui.workspace = true
