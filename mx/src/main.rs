@@ -3,8 +3,6 @@
 use std::borrow::Cow;
 use std::ffi::OsStr;
 use std::ffi::OsString;
-use std::path::Path;
-use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
@@ -17,15 +15,15 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use flume::Receiver;
 use flume::Sender;
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
-use ratatui::buffer::Buffer;
+use ratatui::crossterm;
+use ratatui::crossterm::ExecutableCommand;
+use ratatui::crossterm::terminal::EnableLineWrap;
 use ratatui::layout::Constraint;
 use ratatui::layout::Direction;
 use ratatui::layout::Flex;
 use ratatui::layout::Layout;
-use ratatui::layout::Margin;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::text::Line;
 use ratatui::widgets::Block;
 use ratatui::widgets::BorderType;
 use ratatui::widgets::Padding;
@@ -38,6 +36,9 @@ use tachyonfx::EffectRenderer;
 use tachyonfx::fx;
 use tachyonfx::fx::RepeatMode;
 use tachyonfx::pattern::SweepPattern;
+use terminput::Encoding;
+use terminput::KittyFlags;
+use terminput_crossterm::to_terminput;
 use tracing::instrument;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -53,9 +54,13 @@ use crate::logging::Trace;
 
 fn main() -> Result<()> {
     color_eyre::install()?;
-    let render_chan = flume::unbounded();
+    let render_chan = flume::bounded(1024);
     _ = tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::from_default_env())
+        .with(
+            tracing_subscriber::EnvFilter::builder()
+                .with_default_directive("info".parse()?)
+                .from_env_lossy(),
+        )
         .with(RatatuiLayer::new(render_chan.0.clone()))
         .try_init();
 
@@ -75,6 +80,7 @@ pub struct App {
     args: MxArgs,
     /// Is the application running?
     running: AtomicBool,
+    focused: AtomicBool,
     aspect: (u16, u16),
     /// tells the renderer to update
     render_chan: Chan<RenderMsg>,
@@ -125,10 +131,17 @@ pub enum RenderMsg {
 pub enum ParserMsg {
     SetSize(u16, u16),
     Read(Box<[u8]>, usize),
+    Write([u8; 16], usize),
     Quit,
 }
 
 type Chan<T> = (Sender<T>, Receiver<T>);
+
+enum RendererAction {
+    ShouldQuit,
+    ShouldRender(vt100::Screen),
+    Idle,
+}
 
 impl App {
     /// Construct a new instance of [`App`].
@@ -138,7 +151,8 @@ impl App {
             running: true.into(),
             aspect,
             render_chan,
-            parser_chan: flume::unbounded(),
+            parser_chan: flume::bounded(32),
+            focused: true.into(),
         }
     }
 
@@ -183,6 +197,7 @@ impl App {
                 let parser = RwLock::new(parser);
                 let mut reader = pair.master.try_clone_reader().unwrap();
                 let mut killer = child.clone_killer();
+                let mut writer = pair.master.take_writer().map_err(|err| eyre!("{err}"))?;
                 let pair = Mutex::new(pair);
 
                 std::thread::scope(|scope| {
@@ -207,6 +222,9 @@ impl App {
                     scope.spawn(|| -> Result<()> {
                         for msg in self.parser_chan.1.iter() {
                             // tracing::info!("{msg:?}");
+                            if !self.running.load(Ordering::Relaxed) {
+                                break;
+                            }
                             match msg {
                                 ParserMsg::SetSize(w, h) => {
                                     parser.write().unwrap().set_size(h, w);
@@ -226,25 +244,16 @@ impl App {
                                     parser.write().unwrap().process(&buffer[..n]);
                                     _ = self.render_chan.0.send(RenderMsg::Draw);
                                 }
+                                ParserMsg::Write(buffer, n) => {
+                                    writer.write_all(&buffer[..n])?;
+                                }
                                 ParserMsg::Quit => break,
-                            }
-                            if !self.running.load(Ordering::Relaxed) {
-                                break;
                             }
                         }
                         Ok(())
                     });
 
                     scope.spawn(|| self.renderer(&parser, terminal));
-                    scope.spawn(|| {
-                        loop {
-                            self.handle_crossterm_events();
-                            if !self.running.load(Ordering::Relaxed) {
-                                while killer.kill().is_err() {}
-                                break;
-                            }
-                        }
-                    });
                 });
 
                 Ok(())
@@ -253,7 +262,11 @@ impl App {
     }
 
     #[instrument(skip_all)]
-    fn renderer(&self, parser: &RwLock<vt100::Parser>, mut terminal: DefaultTerminal) {
+    fn renderer(
+        &self,
+        parser: &RwLock<vt100::Parser>,
+        mut terminal: DefaultTerminal,
+    ) -> Result<()> {
         let mut app_fx = AppFx {
             title_hsl_shift: Some(fx::repeat(
                 fx::parallel(&[
@@ -269,27 +282,38 @@ impl App {
             )),
         };
         let mut last_frame = Instant::now();
+        let mut screen = None;
         loop {
-            if app_fx.running() {
-                _ = self.render_chan.0.send(RenderMsg::Draw);
-            }
             if !self.running.load(Ordering::Relaxed) {
-                break;
+                break Ok(());
             }
-            let mut dt = last_frame.elapsed();
+            if !self.focused.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_millis(100).into());
+            }
+            if crossterm::event::poll(Duration::from_millis(16).into())? {
+                self.handle_crossterm_events()?;
+            }
+            let dt = last_frame.elapsed();
             last_frame = Instant::now();
             for msg in self.render_chan.1.try_iter() {
-                let last_frame = Instant::now();
-                if !self.handle_msg(msg, parser, &mut terminal, &mut app_fx, dt.into()) {
-                    break;
+                match self.handle_msg(msg, parser, &mut terminal, &mut app_fx, dt.into()) {
+                    RendererAction::ShouldQuit => break,
+                    RendererAction::ShouldRender(sc) => {
+                        screen = Some(sc);
+                    }
+                    RendererAction::Idle => {}
                 }
-                dt = last_frame.elapsed();
             }
-            if app_fx.running() {
-                // this is only used for effects so it can be low fps
-                if let Some(left) = Duration::from_millis(100).checked_sub(dt.into()) {
-                    std::thread::sleep(left.into());
+            if let Some(ref screen) = screen {
+                let res = terminal.draw(|frame| {
+                    self.draw(frame, screen, &mut app_fx, dt.into());
+                });
+                if let Err(err) = res {
+                    tracing::warn!("failed to draw: {err}");
                 }
+            }
+            if let Some(left) = Duration::from_millis(16).checked_sub(dt.into()) {
+                std::thread::sleep(left.into());
             }
         }
     }
@@ -301,31 +325,20 @@ impl App {
         terminal: &mut DefaultTerminal,
         app_fx: &mut AppFx,
         dt: Duration,
-    ) -> bool {
+    ) -> RendererAction {
         match msg {
-            RenderMsg::Quit => return false,
+            RenderMsg::Quit => return RendererAction::ShouldQuit,
             RenderMsg::Log(log) => {
-                let area = self.get_pty_area(terminal.get_frame().area());
                 _ = terminal.insert_before(1, |buf| {
                     log.render(buf.area, buf);
                 });
-                // _ = self.render_chan.0.send(RenderMsg::Draw);
             }
             RenderMsg::Draw => {
                 // tracing::info!("draw");
-                let parser = parser.read().unwrap();
-                let screen = parser.screen();
-                let res = terminal.draw(|frame| {
-                    self.draw(frame, screen, app_fx, dt);
-                });
-                drop(parser);
-
-                if let Err(err) = res {
-                    tracing::warn!("failed to draw: {err}");
-                }
+                return RendererAction::ShouldRender(parser.read().unwrap().screen().clone());
             }
         };
-        true
+        RendererAction::Idle
     }
 
     fn get_pty_area(&self, area: Rect) -> Rect {
@@ -381,19 +394,46 @@ impl App {
     }
 
     /// Reads the crossterm events and updates the state of [`App`].
-    fn handle_crossterm_events(&self) {
+    fn handle_crossterm_events(&self) -> Result<()> {
         let event = crossterm::event::read();
-        match event {
-            Ok(evt) => match evt {
+        if let Ok(evt) = &event {
+            match evt.clone() {
+                Event::FocusLost => {
+                    self.focused.store(false, Ordering::Release);
+                }
+                Event::FocusGained => {
+                    self.focused.store(true, Ordering::Release);
+                }
                 Event::Key(key) if key.kind == KeyEventKind::Press => self.on_key_event(key),
                 Event::Mouse(_) => {}
                 Event::Resize(w, h) => {
-                    _ = self.parser_chan.0.send(ParserMsg::SetSize(w, h));
+                    let area = self.get_pty_area(Rect {
+                        x: 0,
+                        y: 0,
+                        width: w,
+                        height: h,
+                    });
+                    _ = self
+                        .parser_chan
+                        .0
+                        .send(ParserMsg::SetSize(area.width, area.height));
                 }
                 _ => {}
-            },
-            _ => {}
+            }
+        };
+
+        if self.focused.load(Ordering::Relaxed)
+            && let Ok(event) = event
+        {
+            let mut buf = [0; 16];
+            let event = to_terminput(event)?;
+            let written = event.encode(&mut buf, Encoding::Kitty(KittyFlags::all()));
+            if let Ok(written) = written {
+                self.parser_chan.0.send(ParserMsg::Write(buf, written))?;
+            }
         }
+
+        Ok(())
     }
 
     /// Handles the key events and updates the state of [`App`].
