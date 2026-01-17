@@ -1,4 +1,3 @@
-pub mod args;
 pub mod logging;
 
 pub use logging::layer;
@@ -10,6 +9,9 @@ pub enum RenderMsg {
     Log(Trace),
     Draw,
     Quit,
+    IpcBuildProgress,
+    IpcBuildStarted(usize, String),
+    IpcBuildFinished,
 }
 
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};

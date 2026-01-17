@@ -7,16 +7,16 @@ use std::{
 use flume::Sender;
 use ratatui::{
     prelude::{Buffer, Rect},
-    style::{Color, Style},
+    style::{Color, Style, Styled},
     text::{self, Line},
     widgets::Widget,
 };
 use serde::{Deserialize, Serialize, de::Visitor};
 use tracing::Level;
-use tracing_subscriber::Layer;
+use tracing_subscriber::{Layer, registry::LookupSpan};
 
 use crate::RenderMsg;
-use color_eyre::Result;
+use anyhow::Result;
 
 trait MxLayer {
     fn send(&self, trace: Trace);
@@ -27,21 +27,20 @@ pub struct MxLayerImpl<L>(L);
 impl<S, L> Layer<S> for MxLayerImpl<L>
 where
     L: MxLayer + 'static,
-    S: tracing::Subscriber,
+    S: tracing::Subscriber + for<'lookup> LookupSpan<'lookup>,
 {
-    fn on_event(
-        &self,
-        event: &tracing::Event<'_>,
-        _ctx: tracing_subscriber::layer::Context<'_, S>,
-    ) {
+    fn on_event(&self, event: &tracing::Event<'_>, ctx: tracing_subscriber::layer::Context<'_, S>) {
         let metadata = event.metadata();
 
         // Extract message
         let mut visitor = MxVisitor::default();
         event.record(&mut visitor);
+
         let trace = Trace {
             level: MxLevel(*metadata.level()),
             message: visitor.message,
+            fields: visitor.fields,
+            span_data: None,
         };
 
         self.0.send(trace);
@@ -77,7 +76,12 @@ impl tracing::field::Visit for MxVisitor {
         if field.name() == "message" {
             self.message = format!("{:?}", value).into();
         } else {
-            let name = format!("{:?}", field.name()).into();
+            let name = match field.name() {
+                "return" => "ret",
+                "error" => "err",
+                name => name,
+            };
+            let name = name.to_string().into();
             let value = format!("{value:?}").into();
             self.fields.push((name, value));
         }
@@ -87,7 +91,15 @@ impl tracing::field::Visit for MxVisitor {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Trace {
     level: MxLevel,
-    message: Arc<str>,
+    message: Str,
+    fields: Vec<(Str, Str)>,
+    span_data: Option<Vec<SpanData>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpanData {
+    span_name: Str,
+    fields: Vec<(Str, Str)>,
 }
 
 #[derive(Debug, Clone)]
@@ -168,7 +180,13 @@ impl Widget for Trace {
             text::Span::raw(format!("[{}] ", self.level)).style(Style::new().fg(self.color()));
         let message =
             text::Span::raw(format!("{}", self.message)).style(Style::new().fg(Color::White).dim());
-        let line = Line::from_iter([level, message]);
+        let fields = self
+            .fields
+            .into_iter()
+            .map(|(name, value)| format!("{}={value} ", name.set_style(Style::new().italic())))
+            .collect::<String>();
+        let fields = text::Span::raw(fields).style(Style::new().fg(Color::White).dim());
+        let line = Line::from_iter([level, fields, message]);
         let area = area.centered_horizontally(ratatui::layout::Constraint::Ratio(1, 2));
         line.render(area, buf);
     }
