@@ -269,19 +269,22 @@ impl DevServerLogCollector {
             loop {
                 let (mut stream, _) = listener.accept()?;
                 tracing::trace!("accepted connection");
-                loop {
-                    let mut deserializer = dlhn::Deserializer::new(&mut stream);
-                    let trace = Trace::deserialize(&mut deserializer);
-                    match trace {
-                        Ok(trace) => {
-                            tx.send(RenderMsg::Log(trace))?;
-                        }
-                        Err(dlhn::de::Error::Read) => break,
-                        Err(err) => {
-                            tracing::warn!("dev server error: {err}");
+                let tx = tx.clone();
+                std::thread::spawn(move || -> Result<()> {
+                    loop {
+                        let mut deserializer = dlhn::Deserializer::new(&mut stream);
+                        let trace = Trace::deserialize(&mut deserializer);
+                        match trace {
+                            Ok(trace) => {
+                                tx.send(RenderMsg::Log(trace))?;
+                            }
+                            Err(dlhn::de::Error::Read) => break Ok(()),
+                            Err(err) => {
+                                tracing::warn!("dev server error: {err}");
+                            }
                         }
                     }
-                }
+                });
             }
         });
 
