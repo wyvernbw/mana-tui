@@ -110,7 +110,7 @@ impl AppBridge {
     #[instrument(skip_all)]
     pub fn run(self) -> Result<()> {
         match &self.args.cmd {
-            args::MxCommand::Run(run) => {
+            args::MxCommand::Serve(run) => {
                 _ = tracing_subscriber::registry()
                     .with(
                         tracing_subscriber::EnvFilter::builder()

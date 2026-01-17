@@ -17,7 +17,7 @@ use crate::{AppBridge, args};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) enum IpcMessage {
-    Run(args::Run),
+    Run(args::Serve),
     Reload,
     Kill,
     InnerProgressUpdate(InnerProgressUpdate),
@@ -31,7 +31,7 @@ pub(crate) enum InnerProgressUpdate {
 }
 
 pub(crate) struct IpcInner {
-    running: Option<args::Run>,
+    running: Option<args::Serve>,
     stream: TcpStream,
 }
 

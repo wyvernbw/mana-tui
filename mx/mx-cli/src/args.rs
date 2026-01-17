@@ -11,7 +11,7 @@ pub struct MxArgs {
 
 #[derive(clap::Args, Clone, Debug, Serialize, Deserialize)]
 /// Run an executable
-pub struct Run {
+pub struct Serve {
     #[command(flatten)]
     pub args: RunnableArgs,
     #[command(flatten)]
@@ -22,7 +22,7 @@ pub struct Run {
 
 #[derive(clap::Subcommand, Clone, Debug, Serialize, Deserialize)]
 pub enum MxCommand {
-    Run(Run),
+    Serve(Serve),
     Ipc,
 }
 
