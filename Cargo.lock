@@ -931,6 +931,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "mana-tui-beheaded"
+version = "0.1.0"
+dependencies = [
+ "bon",
+ "color-eyre",
+ "derive_more",
+ "glam",
+ "hecs",
+ "mana-tui",
+ "mana-tui-macros",
+ "ratatui",
+ "strum",
+ "tracing",
+ "tracing-subscriber",
+ "tui-scrollview",
+]
+
+[[package]]
 name = "mana-tui-elemental"
 version = "0.0.1"
 dependencies = [

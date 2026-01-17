@@ -49,7 +49,7 @@ members = [
     "mana-tui-macros",
     "mx/mx-core",
     "mx/mx-cli",
-    "examples/todo-app",
+    "examples/todo-app", "mana-tui-beheaded",
 ]
 resolver = "3"
 
