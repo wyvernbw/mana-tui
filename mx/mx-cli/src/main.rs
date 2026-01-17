@@ -1,5 +1,7 @@
 #![feature(try_blocks)]
 
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
@@ -14,6 +16,8 @@ use flume::Receiver;
 use flume::Sender;
 use mx_core::RenderMsg;
 use mx_core::logging::DevServerLogCollector;
+use notify::PollWatcher;
+use notify::Watcher;
 use portable_pty::{NativePtySystem, PtySize, PtySystem};
 use ratatui::DefaultTerminal;
 use ratatui::TerminalOptions;
@@ -46,7 +50,7 @@ use crate::tui::AppFx;
 
 static SERVING: &str = r#" ----------------------------------------------------------
         💫 Serving your application!
-        Press C-SPC to use the `mx` menu.
+        Press C-c to use the `mx` menu.
         Your app will automatically reload if you change the code.
         ----------------------------------------------------------"#;
 
@@ -243,6 +247,33 @@ impl AppBridge {
         // set up state
         // DONE: refactor into a struct
         let mut state = RendererState::new();
+        let ipc_sender = self.ipc_chan.0.clone();
+        let mut watcher = PollWatcher::new(
+            move |event: Result<notify::Event, _>| {
+                let Ok(event) = event else {
+                    return;
+                };
+                let is_rust_file = |paths: &[PathBuf]| {
+                    paths
+                        .iter()
+                        .any(|path| path.extension().is_some_and(|ext| ext == "rs"))
+                };
+                match event.kind {
+                    notify::EventKind::Create(_)
+                    | notify::EventKind::Modify(_)
+                    | notify::EventKind::Remove(_) => {
+                        if is_rust_file(event.paths.as_slice()) {
+                            _ = ipc_sender.send(IpcEvent::Request(ipc::IpcMessage::Reload));
+                        }
+                    }
+                    _ => {}
+                }
+            },
+            notify::Config::default()
+                .with_manual_polling()
+                .with_compare_contents(true),
+        )?;
+        watcher.watch(Path::new("."), notify::RecursiveMode::Recursive)?;
         loop {
             if !self.running.load(Ordering::Relaxed) {
                 break Ok(());
@@ -251,7 +282,7 @@ impl AppBridge {
                 std::thread::sleep(Duration::from_millis(100).into());
             }
             if crossterm::event::poll(Duration::from_millis(16).into())? {
-                self.handle_crossterm_events()?;
+                self.handle_crossterm_events(&mut state)?;
             }
             let dt = state.last_frame.elapsed();
             state.last_frame = Instant::now();
@@ -275,6 +306,7 @@ impl AppBridge {
             if let Err(err) = res {
                 tracing::warn!("failed to draw: {err}");
             }
+            watcher.poll()?;
             if let Some(left) = Duration::from_millis(16).checked_sub(dt.into()) {
                 std::thread::sleep(left.into());
             }
@@ -328,7 +360,7 @@ impl AppBridge {
     }
 
     /// Reads the crossterm events and updates the state of [`App`].
-    fn handle_crossterm_events(&self) -> Result<()> {
+    fn handle_crossterm_events(&self, state: &mut RendererState) -> Result<()> {
         let event = crossterm::event::read();
         if let Ok(evt) = &event {
             match evt.clone() {
@@ -338,7 +370,7 @@ impl AppBridge {
                 Event::FocusGained => {
                     self.focused.store(true, Ordering::Release);
                 }
-                Event::Key(key) if key.kind == KeyEventKind::Press => self.on_key_event(key),
+                Event::Key(key) if key.kind == KeyEventKind::Press => self.on_key_event(state, key),
                 Event::Mouse(_) => {}
                 Event::Resize(w, h) => {
                     let area = self.get_pty_area(Rect {
@@ -356,7 +388,8 @@ impl AppBridge {
             }
         };
 
-        if self.focused.load(Ordering::Relaxed)
+        if !state.mx_menu_open
+            && self.focused.load(Ordering::Relaxed)
             && let Ok(event) = event
         {
             let mut buf = [0; 16];
@@ -371,11 +404,15 @@ impl AppBridge {
     }
 
     /// Handles the key events and updates the state of [`App`].
-    fn on_key_event(&self, key: KeyEvent) {
-        match (key.modifiers, key.code) {
-            (_, KeyCode::Esc | KeyCode::Char('q'))
-            | (KeyModifiers::CONTROL, KeyCode::Char('c') | KeyCode::Char('C')) => self.quit(),
-            // Add other key handlers here.
+    fn on_key_event(&self, state: &mut RendererState, key: KeyEvent) {
+        match (state.mx_menu_open, key.modifiers, key.code) {
+            (true, _, KeyCode::Esc | KeyCode::Char('q')) => self.quit(),
+            (false, KeyModifiers::CONTROL, KeyCode::Char('c') | KeyCode::Char('C')) => {
+                state.mx_menu_open = true;
+            }
+            (true, KeyModifiers::CONTROL, KeyCode::Char('c') | KeyCode::Char('C')) => {
+                state.mx_menu_open = false;
+            }
             _ => {}
         }
     }
@@ -398,6 +435,7 @@ pub(crate) struct RendererState {
     stage: AppStage,
     build_start: Instant,
     build_duration: Duration,
+    mx_menu_open: bool,
 }
 
 pub(crate) enum AppStage {
@@ -439,6 +477,7 @@ impl RendererState {
             screen: None,
             running_app: None,
             stage: AppStage::StaringIpc,
+            mx_menu_open: false,
         }
     }
 

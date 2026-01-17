@@ -119,9 +119,12 @@ impl<'a> Widget for StatusCorner<'a> {
 
         let block = Block::bordered()
             .border_type(BorderType::Rounded)
-            .border_style(Style::new().dim())
+            .border_style(match self.state.mx_menu_open {
+                true => Style::new().green(),
+                false => Style::new().dim(),
+            })
             .title_alignment(ratatui::layout::HorizontalAlignment::Right)
-            .title_top(" C-SPC: more ");
+            .title_top(" C-c: more ");
         let inner = block.inner(area);
         block.render(area, buf);
 
