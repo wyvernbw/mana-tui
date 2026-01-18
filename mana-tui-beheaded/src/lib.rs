@@ -23,25 +23,31 @@ use crate::schedule::PreRenderSchedule;
 pub mod focus;
 pub mod schedule;
 
-pub fn handle_event(mut world: &mut World, event: Event) {
+pub fn handle_event(mut world: &mut World, event: Event) -> bool {
     match event {
         Event::FocusGained => {}
         Event::FocusLost => {}
         Event::Key(key_event) => {
-            focus::keybind_clicked_system(world, key_event);
+            let consumed = focus::keybind_clicked_system(world, key_event);
+            world.run_systems::<PostRenderSchedule>();
             focus::handle_pressed(world);
+            focus::press_post_update_system(world);
+            return consumed;
         }
         Event::Mouse(mouse_event) => {
             focus::clear_old_hovers(world);
-            _ = focus::handle_mouse_event(world, mouse_event);
+            let consumed = focus::handle_mouse_event(world, mouse_event);
             focus::on_click_system(world);
             world.run_systems::<PostRenderSchedule>();
             focus::click_post_update_system(world);
-            {}
+            if consumed == Ok(true) {
+                return true;
+            }
         }
         Event::Paste(_) => {}
         Event::Resize(_, _) => {}
     }
+    false
 }
 
 pub fn setup_interactions(mut world: &mut World, root: Entity) {
@@ -63,7 +69,10 @@ pub fn init(world: &mut World) {
 /// # Panics
 ///
 /// Panics if the user hasn't called [`init`].
-pub async fn read(world: &mut World) -> Option<Event> {
+pub async fn read<T>(
+    world: &mut World,
+    handler: impl Fn(&mut World, Event) -> Option<T>,
+) -> Option<T> {
     let queue = {
         let queue = world
             .get_resource::<&EventQueue>()
@@ -80,21 +89,26 @@ pub async fn read(world: &mut World) -> Option<Event> {
                 let Ok(inner_event) = inner_event else {
                     continue;
                 };
-                handle_ui_event(world, inner_event);
-                return None;
+                if handle_ui_event(world, inner_event) {
+                    return None;
+                }
             }
             crossterm_event = event_stream.next() => {
                 let Some(Ok(event)) = crossterm_event else {
                     continue;
                 };
-                handle_event(world, event.clone());
-                return Some(event);
+                let consumed = handle_event(world, event.clone());
+                if let Some(value) = handler(world, event) { return Some(value) }
+                if consumed {
+                    return None;
+                }
+
             }
         };
     }
 }
 
-pub(crate) fn handle_ui_event(world: &mut World, event: UiEvent) {
+pub(crate) fn handle_ui_event(world: &mut World, event: UiEvent) -> bool {
     match event {
         UiEvent::ClickedStyleFinished(typeid) => {
             let mut focus = world
@@ -102,9 +116,11 @@ pub(crate) fn handle_ui_event(world: &mut World, event: UiEvent) {
                 .expect("focus state resource must be initialized");
             if let Some(focus_state) = focus.get_mut(&typeid) {
                 focus_state.current_style = focus_state.normal_style;
+                return true;
             }
         }
     }
+    false
 }
 
 #[derive(Debug, Clone, derive_more::Deref, derive_more::DerefMut)]

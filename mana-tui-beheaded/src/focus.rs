@@ -64,16 +64,18 @@ pub(crate) fn clear_old_hovers(world: &mut World) {
 pub(crate) fn handle_mouse_event(
     world: &mut World,
     event: MouseEvent,
-) -> Result<(), hecs::ComponentError> {
+) -> Result<bool, hecs::ComponentError> {
     let queue = world.get_resource::<&EventQueue>().unwrap().0.clone();
     tracing::info!(?event);
     let uistack = {
         let Ok(uistack) = world.get_resource::<&UiStack>() else {
-            return Ok(());
+            return Ok(false);
         };
 
         uistack.stack.clone()
     };
+
+    let mut consumed = false;
 
     for entity in uistack.iter().rev().copied() {
         let mut query_one = world.query_one::<(&Props, Option<&FocusPolicy>, &Marker)>(entity);
@@ -101,6 +103,7 @@ pub(crate) fn handle_mouse_event(
             MouseEventKind::Down(_) => match focus_policy {
                 FocusPolicy::Block => {
                     world.insert_one(entity, Clicked)?;
+                    consumed = true;
                     tokio::task::spawn(async move {
                         tokio::time::sleep(Duration::from_millis(100)).await;
                         _ = queue
@@ -114,6 +117,7 @@ pub(crate) fn handle_mouse_event(
             },
             MouseEventKind::Moved => match focus_policy {
                 FocusPolicy::Block => {
+                    consumed = true;
                     world.insert_one(entity, Hovered)?;
                     break;
                 }
@@ -123,13 +127,22 @@ pub(crate) fn handle_mouse_event(
         }
     }
 
-    Ok(())
+    Ok(consumed)
 }
 
 pub(crate) fn click_post_update_system(world: &mut World) {
     let mut cmd = CommandBuffer::new();
     for (clicked, _) in world.query_mut::<(Entity, &Clicked)>() {
         cmd.remove_one::<Clicked>(clicked);
+        cmd.insert_one(clicked, Focused);
+    }
+    cmd.run_on(world);
+}
+
+pub(crate) fn press_post_update_system(world: &mut World) {
+    let mut cmd = CommandBuffer::new();
+    for (clicked, _) in world.query_mut::<(Entity, &Pressed)>() {
+        cmd.remove_one::<Pressed>(clicked);
         cmd.insert_one(clicked, Focused);
     }
     cmd.run_on(world);
@@ -203,18 +216,27 @@ impl Keybind {
 
 pub struct Pressed;
 
-pub(crate) fn keybind_clicked_system(world: &mut World, event: KeyEvent) {
+pub(crate) fn keybind_clicked_system(world: &mut World, event: KeyEvent) -> bool {
+    let queue = world.get_resource::<&EventQueue>().unwrap().0.clone();
     let mut cmd = CommandBuffer::new();
-    for (entity, keybind) in world.query_mut::<(Entity, &Keybind)>() {
+    let mut consumed = false;
+    for (entity, keybind, &marker) in world.query_mut::<(Entity, &Keybind, &Marker)>() {
         if keybind.event_eq(event, KeyEventKind::Press) {
+            consumed = true;
             cmd.insert_one(entity, Pressed);
-            println!("pressed");
+            let tx = queue.0.clone();
+            tokio::task::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                _ = tx
+                    .send_async(crate::UiEvent::ClickedStyleFinished(marker.0))
+                    .await;
+            });
         } else if keybind.event_eq(event, KeyEventKind::Release) {
             cmd.remove_one::<Pressed>(entity);
-            println!("released");
         }
     }
     cmd.run_on(world);
+    consumed
 }
 
 pub(crate) fn handle_pressed(world: &mut World) {
@@ -264,7 +286,7 @@ pub trait FocusExt: Ecs + SystemsExt {
         if is_new {
             self.add_system::<PostRenderSchedule>(|world| {
                 let Some((entity, &props, _, _)) = world
-                    .query_mut::<(Entity, &Props, &Clicked, &T)>()
+                    .query_mut::<(Entity, &Props, Or<&Clicked, &Pressed>, &T)>()
                     .into_iter()
                     .next()
                 else {

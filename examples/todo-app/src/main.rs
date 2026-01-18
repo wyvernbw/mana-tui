@@ -10,11 +10,7 @@ use crossterm::{
     },
     terminal::EnterAlternateScreen,
 };
-use mana_tui::mana_tui_beheaded::{
-    focus::FocusExt,
-    schedule::{PostRenderSchedule, PreRenderSchedule},
-};
-use mana_tui::mana_tui_utils::systems::SystemsExt;
+use mana_tui::{key, mana_tui_beheaded::focus::FocusExt};
 use mana_tui::{
     mana_tui_beheaded::{
         self,
@@ -59,6 +55,8 @@ async fn main() -> anyhow::Result<()> {
 async fn app(terminal: &mut DefaultTerminal) -> Result<()> {
     let mut ctx = ElementCtx::new();
     mana_tui_beheaded::init(&mut ctx);
+    let r = init(&mut ctx, terminal.get_frame().area());
+    ctx.despawn_ui(r);
     loop {
         let root = init(&mut ctx, terminal.get_frame().area());
         terminal
@@ -66,11 +64,23 @@ async fn app(terminal: &mut DefaultTerminal) -> Result<()> {
                 ctx.render(root, frame.area(), frame.buffer_mut());
             })
             .unwrap();
-        if let Some(event) = mana_tui_beheaded::read(&mut ctx).await {
-            if handle_events(&mut ctx, event.clone()) {
-                break Ok(());
-            }
+        // returning Some from the read handler gives control back to the application
+        //
+        // note that mana tui will give back control occasionally on certain crossterm
+        // or ui events. in those cases, read returns None.
+        let quit = mana_tui_beheaded::read(&mut ctx, |world, event| match event {
+            // quit application
+            Event::Key(key!(Char('q'), Press)) => Some(true),
+            // redraw screen (debug purposes)
+            Event::Key(key!(Char('r'), Press)) => Some(false),
+            _ => None,
+        })
+        .await;
+
+        if quit == Some(true) {
+            return Ok(());
         }
+
         ctx.despawn_ui(root);
     }
 }

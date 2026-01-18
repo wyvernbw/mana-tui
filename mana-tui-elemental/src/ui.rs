@@ -392,7 +392,8 @@ fn process_ui_system(world: &mut ElementCtx) {
         if let Ok(builders) = world.remove_one::<ChildrenBuilders>(node) {
             let mut builders = builders.0;
             let style = world.get::<&Style>(node).ok().map(|style| *style);
-            world.reserve_entities(builders.len() as u32);
+            // vvvvvvv you have caused me much pain
+            // world.reserve_entities(builders.len() as u32);
             let children = builders
                 .iter_mut()
                 .map(|builder| {
