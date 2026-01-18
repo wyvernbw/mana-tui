@@ -2,6 +2,7 @@
 //!
 //! implements the layout algorithm.
 use std::{
+    any::TypeId,
     ops::{Deref, Div},
     sync::Arc,
 };
@@ -9,9 +10,11 @@ use std::{
 use derive_more as d;
 use glam::{U16Vec2, u16vec2};
 use hecs::{CommandBuffer, Component, ComponentError, Entity, Query, World};
+use mana_tui_utils::Ecs;
 use ratatui::{
     buffer::Buffer,
     layout::{Direction, Margin, Rect},
+    style::{Style, Styled},
     widgets::{Padding, Widget},
 };
 use ratatui::{layout::Offset, widgets::StatefulWidget};
@@ -22,6 +25,10 @@ pub use tui_scrollview::{ScrollView, ScrollViewState};
 pub trait ElWidget<M>: std::fmt::Debug + Component {
     /// render the element through the shared reference. clones internally
     fn render_element(&self, area: Rect, buf: &mut Buffer);
+    /// sets the style of a widget
+    fn set_style(&mut self, style: Style);
+    /// gets the style of a widget
+    fn get_style(&self) -> Style;
 }
 
 /// marker for [`ElWidget`] trait.
@@ -29,10 +36,18 @@ pub struct WidgetMarker;
 
 impl<W: 'static> ElWidget<WidgetMarker> for W
 where
-    W: Widget + Clone + std::fmt::Debug + Component,
+    W: Widget + Styled<Item = W> + Clone + std::fmt::Debug + Component,
 {
     fn render_element(&self, area: Rect, buf: &mut Buffer) {
         self.clone().render(area, buf);
+    }
+
+    fn set_style(&mut self, style: Style) {
+        *self = Styled::set_style(self.clone(), style);
+    }
+
+    fn get_style(&self) -> Style {
+        self.style()
     }
 }
 
@@ -70,6 +85,8 @@ pub struct ElementCtx {
     #[deref_mut]
     pub(crate) world: World,
 }
+
+impl Ecs for ElementCtx {}
 
 impl ElementCtx {
     /// create an empty context.
@@ -618,11 +635,21 @@ pub type Element = Entity;
 /// see [`hecs::World::query`] and [`hecs::World::query_mut`] for details.
 pub struct TuiElMarker;
 
+///
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Props {
-    pub(crate) size: U16Vec2,
-    pub(crate) position: U16Vec2,
-    pub(crate) render: fn(&ElementCtx, Element, Rect, &mut Buffer),
+pub struct Props {
+    ///
+    pub size: U16Vec2,
+    ///
+    pub position: U16Vec2,
+    ///
+    pub render: fn(&ElementCtx, Element, Rect, &mut Buffer),
+    ///
+    pub set_style: fn(&mut World, Element, Style),
+    ///
+    pub get_style: fn(&World, Element) -> Option<Style>,
+    ///
+    pub typeid: TypeId,
 }
 
 impl Props {

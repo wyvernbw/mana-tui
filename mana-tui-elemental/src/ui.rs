@@ -18,10 +18,10 @@
 //!
 //! ```
 
-use std::{borrow::Cow, collections::VecDeque, sync::Arc};
+use std::{any::TypeId, borrow::Cow, collections::VecDeque, sync::Arc};
 
 use glam::U16Vec2;
-use hecs::{CommandBuffer, DynamicBundle, Entity, EntityBuilder, Or, Query};
+use hecs::{CommandBuffer, DynamicBundle, Entity, EntityBuilder, Or, Query, World};
 use ratatui::{
     buffer::Buffer,
     layout::{Direction, Rect},
@@ -141,13 +141,32 @@ where
                 widget.render_element(area, buf);
             }
         }
+        fn set_style_system<M, W: ElWidget<M>>(
+            ctx: &mut World,
+            entity: hecs::Entity,
+            style: Style,
+        ) {
+            if let Ok(mut widget) = ctx.get::<&mut W>(entity) {
+                widget.set_style(style);
+            }
+        }
+        fn get_style_system<M, W: ElWidget<M>>(ctx: &World, entity: hecs::Entity) -> Option<Style> {
+            if let Ok(mut widget) = ctx.get::<&mut W>(entity) {
+                Some(widget.get_style())
+            } else {
+                None
+            }
+        }
         builder.add(self);
         builder.add_bundle((
             TuiElMarker,
             Props {
+                typeid: TypeId::of::<W>(),
                 size: U16Vec2::default(),
                 position: U16Vec2::default(),
                 render: render_system::<M, W>,
+                set_style: set_style_system::<M, W>,
+                get_style: get_style_system::<M, W>,
             },
         ));
         builder
@@ -510,6 +529,17 @@ impl ElementCtx {
         let root = self.spawn(ui);
         process_ui_system(self);
         root
+    }
+
+    /// despawns all entities starting from the root element
+    pub fn despawn_ui(&mut self, root: Element) {
+        let children = self.query_one_mut::<&Children>(root).cloned();
+        _ = self.despawn(root);
+        if let Ok(children) = children {
+            for child in children.iter() {
+                self.despawn_ui(*child);
+            }
+        }
     }
 }
 

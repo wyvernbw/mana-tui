@@ -13,6 +13,8 @@ nightly = ["mana-tui-elemental/nightly"]
 
 [dependencies]
 mx-core.workspace = true
+mana-tui-beheaded.workspace = true
+mana-tui-utils.workspace = true
 
 [dependencies.bon]
 workspace = true
@@ -49,7 +51,7 @@ members = [
     "mana-tui-macros",
     "mx/mx-core",
     "mx/mx-cli",
-    "examples/todo-app", "mana-tui-beheaded",
+    "examples/todo-app", "mana-tui-beheaded", "mana-tui-utils",
 ]
 resolver = "3"
 
@@ -76,6 +78,12 @@ path = "./mana-tui-macros"
 
 [workspace.dependencies.mx-core]
 path = "./mx/mx-core"
+
+[workspace.dependencies.mana-tui-beheaded]
+path = "./mana-tui-beheaded"
+
+[workspace.dependencies.mana-tui-utils]
+path = "./mana-tui-utils"
 
 [workspace.lints.clippy]
 pedantic = "warn"

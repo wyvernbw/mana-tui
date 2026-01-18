@@ -1,38 +1,78 @@
+#![allow(clippy::collapsible_if)]
 use std::io::stdout;
 
 use anyhow::Result;
-use crossterm::event::{EnableMouseCapture, Event, KeyCode, KeyEvent};
-use mana_tui::prelude::*;
+use crossterm::{
+    event::{
+        DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture, Event,
+        KeyCode, KeyEvent, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+        PushKeyboardEnhancementFlags,
+    },
+    terminal::EnterAlternateScreen,
+};
+use mana_tui::mana_tui_beheaded::{
+    focus::FocusExt,
+    schedule::{PostRenderSchedule, PreRenderSchedule},
+};
+use mana_tui::mana_tui_utils::systems::SystemsExt;
+use mana_tui::{
+    mana_tui_beheaded::{
+        self,
+        focus::{FocusPolicy, Keybind, OnClick},
+        setup_interactions,
+    },
+    prelude::*,
+};
 use ratatui::{
     DefaultTerminal, layout::Rect, style::palette::tailwind as tw, symbols::braille::BRAILLE,
 };
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> anyhow::Result<()> {
     mana_tui::mx::init();
-    crossterm::execute!(stdout(), EnableMouseCapture)?;
-    ratatui::run(app)?;
+    crossterm::terminal::enable_raw_mode()?;
+    // just crossterm ceremony
+    crossterm::execute!(
+        stdout(),
+        EnterAlternateScreen,
+        EnableFocusChange,
+        EnableMouseCapture,
+        PushKeyboardEnhancementFlags(
+            KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                | KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        )
+    )?;
+
+    let mut term = ratatui::init();
+    app(&mut term).await?;
+    ratatui::restore();
+
+    crossterm::execute!(
+        stdout(),
+        DisableMouseCapture,
+        DisableFocusChange,
+        PopKeyboardEnhancementFlags
+    )?;
     Ok(())
 }
 
-fn app(terminal: &mut DefaultTerminal) -> Result<()> {
+async fn app(terminal: &mut DefaultTerminal) -> Result<()> {
     let mut ctx = ElementCtx::new();
-    let mut state = AppState::default();
+    mana_tui_beheaded::init(&mut ctx);
     loop {
-        let root = init(&mut ctx, &mut state, terminal.get_frame().area());
+        let root = init(&mut ctx, terminal.get_frame().area());
         terminal
             .draw(|frame| {
                 ctx.render(root, frame.area(), frame.buffer_mut());
             })
             .unwrap();
-        if handle_events(&mut ctx, &mut state, crossterm::event::read()?) {
-            break Ok(());
+        if let Some(event) = mana_tui_beheaded::read(&mut ctx).await {
+            if handle_events(&mut ctx, event.clone()) {
+                break Ok(());
+            }
         }
+        ctx.despawn_ui(root);
     }
-}
-
-#[derive(Debug, Default)]
-struct AppState {
-    todos: Vec<Todo>,
 }
 
 #[derive(Debug, Clone)]
@@ -41,46 +81,55 @@ struct Todo {
     description: String,
 }
 
-fn init(ctx: &mut ElementCtx, state: &mut AppState, area: Rect) -> Element {
-    let root = todo_app().state(state);
+fn init(ctx: &mut ElementCtx, area: Rect) -> Element {
+    let root = todo_app().ctx(ctx).into_view();
     let root = ctx.spawn_ui(root);
     ctx.calculate_layout(root, area).unwrap();
+    setup_interactions(ctx, root);
     root
 }
 
-fn handle_events(ctx: &mut ElementCtx, state: &mut AppState, event: Event) -> bool {
-    match event {
+fn handle_events(ctx: &mut ElementCtx, event: Event) -> bool {
+    matches!(
+        event,
         Event::Key(KeyEvent {
             code: KeyCode::Char('q'),
             ..
-        }) => true,
-        Event::Key(KeyEvent {
-            code: KeyCode::Char('a'),
-            ..
-        }) => {
-            tracing::info!("new todo");
-            state.todos.push(Todo {
-                done: false,
-                description: format!("{} i crave productivity", state.todos.len() + 1),
-            });
-            false
-        }
-        _ => false,
-    }
+        })
+    )
 }
 
 #[subview]
-fn todo_app(state: &mut AppState) -> View {
+fn todo_app(ctx: &mut ElementCtx) -> View {
+    struct AddTodoButton;
+    ctx.use_focus::<AddTodoButton>();
+
+    let mut todos = ctx.query::<&Todo>();
+    let todo_count = todos.iter().count();
     ui! {
         <Block Center Width::grow() Height::grow()>
             <Block .rounded Width::fixed(48) Height::fixed(28) Padding::ZERO>
                 <Titlebar/>
                 <Block Padding::new(2, 2, 1, 2) Width::grow() Height::grow()>
-                    <Text .style={Style::new().bg(tw::SKY.c200).fg(Color::Black)}>"(a) add todo"</Text>
+                    <Text
+                        .style={Style::new().bg(tw::SKY.c200).fg(Color::Black)}
+                        AddTodoButton
+                        FocusPolicy::Block
+                        Keybind::new(KeyCode::Char('a'))
+                        OnClick::new(move |world| {
+                            // we throw our state into the ECS world :)
+                            world.spawn((Todo {
+                                done: false,
+                                description: format!("{} i crave productivity", todo_count + 1),
+                            },));
+                        })
+                    >
+                        "(a) add todo"
+                    </Text>
                     <Block .borders={Borders::TOP} .border_type={BorderType::LightDoubleDashed} Width::grow() Height::fixed(1)/>
                     <Block Gap(1) ScrollView::default() ScrollViewState::new() Width::grow()>
                     {
-                        state.todos.iter().map(|todo| ui! {
+                        todos.iter().map(|todo| ui! {
                             <TodoItem .todo={todo}/>
                         })
                     }

@@ -2,7 +2,9 @@
 //!
 #![doc = include_str!("../readme.md")]
 
+pub use mana_tui_beheaded;
 pub use mana_tui_elemental;
+pub use mana_tui_utils;
 
 pub mod prelude {
     pub use mana_tui_elemental::prelude::*;

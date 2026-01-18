@@ -2,13 +2,6 @@ use mana_tui::prelude::{strum::IntoEnumIterator, *};
 use mana_tui_macros::{subview, ui};
 
 #[subview]
-fn subview_test(name: &'static str) -> View {
-    ui! {
-        { format!("Hello {name}!") }
-    }
-}
-
-#[subview]
 fn container(justify: MainJustify, children: impl AsChildren) -> View {
     ui! {
         <Block
@@ -27,22 +20,6 @@ fn container(justify: MainJustify, children: impl AsChildren) -> View {
 
 #[test]
 fn test() {
-    let _ = ui! {
-        <Block .title_top="sidebar" Width(Size::Fixed(10)) Padding::uniform(1)>
-            <Block .title_top="2" />
-            <Paragraph .alignment={ratatui::layout::HorizontalAlignment::Center}/>
-            <SubviewTest .name="there" />
-            <Container
-                .justify={MainJustify::Start}
-                .children={
-                    (0..3).map(|_| ui!{
-                        <SubviewTest .name="me" />
-                    })
-                }
-            />
-        </Block>
-    };
-
     let _ = ui! {
         <Block .title_top="sidebar" Width(Size::Fixed(10)) Padding::uniform(1)>
         </Block>

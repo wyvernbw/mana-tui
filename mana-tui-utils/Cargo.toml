@@ -1,11 +1,7 @@
 [package]
-name = "mana-tui-elemental"
-version = "0.0.1"
+name = "mana-tui-utils"
+version = "0.1.0"
 edition = "2024"
-license = "MIT"
-
-[features]
-nightly = []
 
 [dependencies]
 ratatui.workspace = true
@@ -14,12 +10,13 @@ derive_more.workspace = true
 tracing.workspace = true
 hecs.workspace = true
 glam = "0.30.10"
-strum = { version = "0.27.2", features = ["derive"] }
-tui-scrollview = "0.6.2"
-mana-tui-utils = { version = "0.1.0", path = "../mana-tui-utils" }
+smallvec = "1.15.1"
+im = "15.1.0"
 
 [dev-dependencies]
 mana-tui = { path = "..", features = ["nightly", "macros"] }
 mana-tui-macros.workspace = true 
 tracing-subscriber = "0.3.22"
-color-eyre = "*"
+
+[lints]
+workspace = true
